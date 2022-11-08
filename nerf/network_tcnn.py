@@ -9,6 +9,76 @@ from activation import trunc_exp
 from .renderer import NeRFRenderer
 
 
+class NeTFMLP(NeRFRenderer):
+
+    def __init__(self,
+                encoding="HashGrid",
+                encoding_dir="SphericalHarmonics",
+                num_layers=2,
+                hidden_dim=64,
+                geo_feat_dim=15,
+                num_layers_color=3,
+                hidden_dim_color=64,
+                bound=1,
+                **kwargs
+                ):
+        super().__init__(bound, **kwargs)
+        
+        # sigma network
+        self.num_layers = num_layers
+        self.hidden_dim = hidden_dim
+
+        per_level_scale = np.exp2(np.log2(2048 * bound / 16) / (16 - 1))
+
+        self.encoder = tcnn.Encoding(
+            n_input_dims=3,
+            encoding_config={
+                "otype": "HashGrid",
+                "n_levels": 16,
+                "n_features_per_level": 2,
+                "log2_hashmap_size": 19,
+                "base_resolution": 16,
+                "per_level_scale": per_level_scale,
+            },
+        )
+        self.encoder_dir = tcnn.Encoding(
+            n_input_dims=3,
+            encoding_config={
+                "otype": "SphericalHarmonics",
+                "degree": 4,
+            },
+        )
+
+        self.sigma_net = tcnn.Network(
+            n_input_dims=32 + self.encoder_dir.n_output_dims,
+            n_output_dims=1,
+            network_config={
+                "otype": "FullyFusedMLP",
+                "activation": "ReLU",
+                "output_activation": "None",
+                "n_neurons": hidden_dim,
+                "n_hidden_layers": num_layers - 1,
+            },
+        )
+
+    def forward(self, x, d):
+        # x: [N, 3], in [-bound, bound]
+        # d: [N, 3], nomalized in [-1, 1]
+
+
+        # sigma
+        x = (x + self.bound) / (2 * self.bound) # to [0, 1]
+        x = self.encoder(x)
+        d = (d + 1) / 2 # tcnn SH encoding requires inputs to be in [0, 1]
+        d = self.encoder_dir(d)
+        h = torch.cat([x, d], dim=-1)
+        sigma = self.sigma_net(h)
+        sigma_ = sigma.unsqueeze(-1)
+        color = torch.hstack([sigma_, sigma_, sigma_])
+
+        return sigma, color
+
+
 class NeRFNetwork(NeRFRenderer):
     def __init__(self,
                  encoding="HashGrid",

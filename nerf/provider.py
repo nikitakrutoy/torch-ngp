@@ -92,7 +92,7 @@ def rand_poses(size, device, radius=1, theta_range=[np.pi/3, 2*np.pi/3], phi_ran
 
 
 class NeRFDataset:
-    def __init__(self, opt, device, type='train', downscale=1, n_test=10):
+    def __init__(self, opt, device, type='train', downscale=1, n_test=100, one_sample_per_ray=False):
         super().__init__()
         
         self.opt = opt
@@ -164,22 +164,49 @@ class NeRFDataset:
         
         # for colmap, manually interpolate a test set.
         if self.mode == 'colmap' and type == 'test':
-            
-            # choose two random poses, and interpolate between.
-            f0, f1 = np.random.choice(frames, 2, replace=False)
-            pose0 = nerf_matrix_to_ngp(np.array(f0['transform_matrix'], dtype=np.float32), scale=self.scale, offset=self.offset) # [4, 4]
-            pose1 = nerf_matrix_to_ngp(np.array(f1['transform_matrix'], dtype=np.float32), scale=self.scale, offset=self.offset) # [4, 4]
-            rots = Rotation.from_matrix(np.stack([pose0[:3, :3], pose1[:3, :3]]))
-            slerp = Slerp([0, 1], rots)
-
+            fs = np.random.choice(frames, n_test, replace=False)
             self.poses = []
-            self.images = None
-            for i in range(n_test + 1):
-                ratio = np.sin(((i / n_test) - 0.5) * np.pi) * 0.5 + 0.5
-                pose = np.eye(4, dtype=np.float32)
-                pose[:3, :3] = slerp(ratio).as_matrix()
-                pose[:3, 3] = (1 - ratio) * pose0[:3, 3] + ratio * pose1[:3, 3]
+            self.images = []
+            for f in fs:
+                pose = nerf_matrix_to_ngp(np.array(f['transform_matrix'], dtype=np.float32), scale=self.scale, offset=self.offset)
+                f_path = os.path.join(self.root_path, f['file_path'])
+
+                image = cv2.imread(f_path, cv2.IMREAD_UNCHANGED) # [H, W, 3] o [H, W, 4]
+                if self.H is None or self.W is None:
+                    self.H = image.shape[0] // downscale
+                    self.W = image.shape[1] // downscale
+
+                # add support for the alpha channel as a mask.
+                if len(image.shape) == 2:
+                    image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+                elif image.shape[-1] == 3: 
+                    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                else:
+                    image = cv2.cvtColor(image, cv2.COLOR_BGRA2RGBA)
+
+                if image.shape[0] != self.H or image.shape[1] != self.W:
+                    image = cv2.resize(image, (self.W, self.H), interpolation=cv2.INTER_AREA)
+                maxv = 2**16 if image.dtype == np.uint16 else 2**8
+                image = image.astype(np.float32) / maxv# [H, W, 3/4]
+
+
                 self.poses.append(pose)
+                self.images.append(image.astype(np.float32))
+            # choose two random poses, and interpolate between.
+            # f0, f1 = np.random.choice(frames, 2, replace=False)
+            # pose0 = nerf_matrix_to_ngp(np.array(f0['transform_matrix'], dtype=np.float32), scale=self.scale, offset=self.offset) # [4, 4]
+            # pose1 = nerf_matrix_to_ngp(np.array(f1['transform_matrix'], dtype=np.float32), scale=self.scale, offset=self.offset) # [4, 4]
+            # rots = Rotation.from_matrix(np.stack([pose0[:3, :3], pose1[:3, :3]]))
+            # slerp = Slerp([0, 1], rots)
+
+            # self.poses = []
+            # self.images = None
+            # for i in range(n_test + 1):
+            #     ratio = np.sin(((i / n_test) - 0.5) * np.pi) * 0.5 + 0.5
+            #     pose = np.eye(4, dtype=np.float32)
+            #     pose[:3, :3] = slerp(ratio).as_matrix()
+            #     pose[:3, 3] = (1 - ratio) * pose0[:3, 3] + ratio * pose1[:3, 3]
+            #     self.poses.append(pose)
 
         else:
             # for colmap, manually split a valid set (the first frame).
@@ -189,7 +216,7 @@ class NeRFDataset:
                 elif type == 'val':
                     frames = frames[:1]
                 # else 'all' or 'trainval' : use all frames
-            
+            frames = frames[::3]
             self.poses = []
             self.images = []
             for f in tqdm.tqdm(frames, desc=f'Loading {type} data'):
@@ -210,18 +237,21 @@ class NeRFDataset:
                     self.W = image.shape[1] // downscale
 
                 # add support for the alpha channel as a mask.
-                if image.shape[-1] == 3: 
+                if len(image.shape) == 2:
+                    image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+                elif image.shape[-1] == 3: 
                     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
                 else:
                     image = cv2.cvtColor(image, cv2.COLOR_BGRA2RGBA)
 
                 if image.shape[0] != self.H or image.shape[1] != self.W:
                     image = cv2.resize(image, (self.W, self.H), interpolation=cv2.INTER_AREA)
-                    
-                image = image.astype(np.float32) / 255 # [H, W, 3/4]
+                maxv = 2**16 if image.dtype == np.uint16 else 2**8
+                image = image.astype(np.float32) / maxv# [H, W, 3/4]
+
 
                 self.poses.append(pose)
-                self.images.append(image)
+                self.images.append(image.astype(np.float32))
             
         self.poses = torch.from_numpy(np.stack(self.poses, axis=0)) # [N, 4, 4]
         if self.images is not None:
@@ -298,7 +328,6 @@ class NeRFDataset:
         poses = self.poses[index].to(self.device) # [B, 4, 4]
 
         error_map = None if self.error_map is None else self.error_map[index]
-        
         rays = get_rays(poses, self.intrinsics, self.H, self.W, self.num_rays, error_map, self.opt.patch_size)
 
         results = {

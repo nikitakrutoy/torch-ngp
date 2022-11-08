@@ -6,6 +6,130 @@ from encoding import get_encoder
 from activation import trunc_exp
 from .renderer import NeRFRenderer
 
+class NeTFMLP2(NeRFRenderer):
+
+    def __init__(self,
+                 encoding="hashgrid",
+                 encoding_dir="sphere_harmonics",
+                 encoding_bg="hashgrid",
+                 num_layers=4,
+                 hidden_dim=64,
+                 num_layers_bg=2,
+                 hidden_dim_bg=64,
+                 bound=1,
+                 **kwargs,
+                ):
+        super().__init__(bound, **kwargs)
+        
+        # sigma network
+        self.num_layers = num_layers
+        self.hidden_dim = hidden_dim
+        self.encoder, self.in_dim = get_encoder(encoding, desired_resolution= 2048 * bound, num_levels=16)
+        self.encoder_dir, self.in_dim_dir = get_encoder(encoding_dir)
+
+        sigma_net = []
+        for l in range(num_layers):
+            if l == 0:
+                in_dim = self.in_dim + self.in_dim_dir
+            else:
+                in_dim = hidden_dim
+            
+            if l == num_layers - 1:
+                out_dim = 1
+            else:
+                out_dim = hidden_dim
+            
+            sigma_net.append(nn.Linear(in_dim, out_dim, bias=False))
+
+        self.sigma_net = nn.ModuleList(sigma_net)
+
+        # background network
+        if self.bg_radius > 0:
+            self.num_layers_bg = num_layers_bg        
+            self.hidden_dim_bg = hidden_dim_bg
+            self.encoder_bg, self.in_dim_bg = get_encoder(encoding_bg, input_dim=2, num_levels=4, log2_hashmap_size=19, desired_resolution=2048) # much smaller hashgrid 
+            
+            bg_net = []
+            for l in range(num_layers_bg):
+                if l == 0:
+                    in_dim = self.in_dim_bg + self.in_dim_dir
+                else:
+                    in_dim = hidden_dim_bg
+                
+                if l == num_layers_bg - 1:
+                    out_dim = 3 # 3 rgb
+                else:
+                    out_dim = hidden_dim_bg
+                
+                bg_net.append(nn.Linear(in_dim, out_dim, bias=False))
+
+            self.bg_net = nn.ModuleList(bg_net)
+        else:
+            self.bg_net = None
+
+    def forward(self, x, d):
+        # x: [N, 3], in [-bound, bound]
+        # d: [N, 3], nomalized in [-1, 1]
+
+                # x: [N, 3], in [-bound, bound]
+        # d: [N, 3], nomalized in [-1, 1]
+
+        # sigma
+        x = self.encoder(x, bound=self.bound)
+        d = self.encoder_dir(d)
+        h = torch.cat([x, d], dim=-1)
+
+        for l in range(self.num_layers):
+            h = self.sigma_net[l](h)
+            if l != self.num_layers - 1:
+                h = F.relu(h, inplace=True)
+
+        #sigma = F.relu(h[..., 0])
+        sigma = trunc_exp(h[..., 0])
+        # geo_feat = h[..., 1:]
+        sigma_ = sigma.unsqueeze(-1)
+        color = torch.hstack([sigma_, sigma_, sigma_])
+
+        return sigma, color
+
+    def background(self, x, d):
+        # x: [N, 2], in [-1, 1]
+
+        h = self.encoder_bg(x) # [N, C]
+        d = self.encoder_dir(d)
+
+        h = torch.cat([d, h], dim=-1)
+        for l in range(self.num_layers_bg):
+            h = self.bg_net[l](h)
+            if l != self.num_layers_bg - 1:
+                h = F.relu(h, inplace=True)
+        
+        # sigmoid activation for rgb
+        rgbs = torch.sigmoid(h)
+
+        return rgbs
+
+    def density(self, x, d):
+        # x: [N, 3], in [-bound, bound]
+        result = self.forward(x, d)
+        return {
+            'sigma': result[0],
+            'color': result[1]
+        }
+
+
+    def get_params(self, lr):
+
+        params = [
+            {'params': self.encoder.parameters(), 'lr': lr},
+            {'params': self.sigma_net.parameters(), 'lr': lr},
+            {'params': self.encoder_dir.parameters(), 'lr': lr},
+        ]
+        if self.bg_radius > 0:
+            params.append({'params': self.encoder_bg.parameters(), 'lr': lr})
+            params.append({'params': self.bg_net.parameters(), 'lr': lr})
+        
+        return params
 
 class NeRFNetwork(NeRFRenderer):
     def __init__(self,

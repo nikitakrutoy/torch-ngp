@@ -468,10 +468,12 @@ class Trainer(object):
         else:
             gt_rgb = images
 
-        outputs = self.model.render(rays_o, rays_d, staged=False, bg_color=bg_color, perturb=True, force_all_rays=False if self.opt.patch_size == 1 else True, **vars(self.opt))
+        outputs = self.model.render(rays_o, rays_d, gt_rgb, staged=False, bg_color=bg_color, perturb=True, force_all_rays=False if self.opt.patch_size == 1 else True, **vars(self.opt))
         # outputs = self.model.render(rays_o, rays_d, staged=False, bg_color=bg_color, perturb=True, force_all_rays=True, **vars(self.opt))
     
         pred_rgb = outputs['image']
+        if "gt" in outputs.keys():
+            gt_rgb = outputs['gt']
 
         # MSE loss
         loss = self.criterion(pred_rgb, gt_rgb).mean(-1) # [B, N, 3] --> [B, N]
@@ -545,6 +547,8 @@ class Trainer(object):
 
         pred_rgb = outputs['image'].reshape(B, H, W, 3)
         pred_depth = outputs['depth'].reshape(B, H, W)
+        if "gt" in outputs.keys():
+            gt_rgb = outputs['gt']
 
         loss = self.criterion(pred_rgb, gt_rgb).mean()
 
@@ -624,6 +628,7 @@ class Trainer(object):
         self.use_tensorboardX = use_tensorboardX
 
     def test(self, loader, save_path=None, name=None, write_video=True):
+        from torchvision.utils import make_grid
 
         if save_path is None:
             save_path = os.path.join(self.workspace, 'results')
@@ -657,9 +662,12 @@ class Trainer(object):
 
                 pred_depth = preds_depth[0].detach().cpu().numpy()
                 pred_depth = (pred_depth * 255).astype(np.uint8)
-
+                if "images" in data:
+                    img = data["images"].squeeze(0) * 255
+                    # img = img / 2**16 * 255
+                    grid = make_grid([img.cpu().permute(2, 1, 0), torch.tensor(pred).permute(2, 1, 0)]).permute(1, 2, 0).numpy().astype(np.uint8)
                 if write_video:
-                    all_preds.append(pred)
+                    all_preds.append(grid)
                     all_preds_depth.append(pred_depth)
                 else:
                     cv2.imwrite(os.path.join(save_path, f'{name}_{i:04d}_rgb.png'), cv2.cvtColor(pred, cv2.COLOR_RGB2BGR))

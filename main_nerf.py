@@ -8,13 +8,16 @@ from nerf.utils import *
 from functools import partial
 from loss import huber_loss
 
+from nerf.network import NeTFMLP2 as NeRFNetwork 
+
+
 #torch.autograd.set_detect_anomaly(True)
 
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument('path', type=str)
-    parser.add_argument('-O', action='store_true', help="equals --fp16 --cuda_ray --preload")
+    parser.add_argument('-O', action='store_true', help="equals --fp16")
     parser.add_argument('--test', action='store_true', help="test mode")
     parser.add_argument('--workspace', type=str, default='workspace')
     parser.add_argument('--seed', type=int, default=0)
@@ -41,7 +44,7 @@ if __name__ == '__main__':
     parser.add_argument('--color_space', type=str, default='srgb', help="Color space, supports (linear, srgb)")
     parser.add_argument('--preload', action='store_true', help="preload all data into GPU, accelerate training but use more GPU memory")
     # (the default value is for the fox dataset)
-    parser.add_argument('--bound', type=float, default=2, help="assume the scene is bounded in box[-bound, bound]^3, if > 1, will invoke adaptive ray marching.")
+    parser.add_argument('--bound', type=float, default=4, help="assume the scene is bounded in box[-bound, bound]^3, if > 1, will invoke adaptive ray marching.")
     parser.add_argument('--scale', type=float, default=0.33, help="scale camera location into box[-bound, bound]^3")
     parser.add_argument('--offset', type=float, nargs='*', default=[0, 0, 0], help="offset of camera location")
     parser.add_argument('--dt_gamma', type=float, default=1/128, help="dt_gamma (>=0) for adaptive ray marching. set to 0 to disable, >0 to accelerate rendering (but usually with worse quality)")
@@ -53,7 +56,7 @@ if __name__ == '__main__':
     parser.add_argument('--gui', action='store_true', help="start a GUI")
     parser.add_argument('--W', type=int, default=1920, help="GUI width")
     parser.add_argument('--H', type=int, default=1080, help="GUI height")
-    parser.add_argument('--radius', type=float, default=5, help="default GUI camera radius from center")
+    parser.add_argument('--radius', type=float, default=2, help="default GUI camera radius from center")
     parser.add_argument('--fovy', type=float, default=50, help="default GUI camera fovy")
     parser.add_argument('--max_spp', type=int, default=64, help="GUI rendering max sample per pixel")
 
@@ -66,8 +69,8 @@ if __name__ == '__main__':
 
     if opt.O:
         opt.fp16 = True
-        opt.cuda_ray = True
-        opt.preload = True
+        # opt.cuda_ray = True
+        # opt.preload = True
     
     if opt.patch_size > 1:
         opt.error_map = False # do not use error_map if use patch-based training
@@ -84,7 +87,7 @@ if __name__ == '__main__':
         assert opt.bg_radius <= 0, "background model is not implemented for --tcnn"
         from nerf.network_tcnn import NeRFNetwork
     else:
-        from nerf.network import NeRFNetwork
+        from nerf.network import NeTFMLP2 as NeRFNetwork 
 
     print(opt)
     
@@ -120,12 +123,12 @@ if __name__ == '__main__':
         else:
             test_loader = NeRFDataset(opt, device=device, type='test').dataloader()
 
-            if test_loader.has_gt:
-                trainer.evaluate(test_loader) # blender has gt, so evaluate it.
+            # if test_loader.has_gt:
+            #     trainer.evaluate(test_loader) # blender has gt, so evaluate it.
     
             trainer.test(test_loader, write_video=True) # test and save video
             
-            trainer.save_mesh(resolution=256, threshold=10)
+            # trainer.save_mesh(resolution=256, threshold=10)
     
     else:
 
