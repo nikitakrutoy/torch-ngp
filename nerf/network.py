@@ -12,7 +12,7 @@ class NeTFMLP2(NeRFRenderer):
                  encoding="hashgrid",
                  encoding_dir="sphere_harmonics",
                  encoding_bg="hashgrid",
-                 num_layers=4,
+                 num_layers=8,
                  hidden_dim=64,
                  num_layers_bg=2,
                  hidden_dim_bg=64,

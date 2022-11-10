@@ -1,0 +1,60 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Main NeRF",
+            "type": "python",
+            "request": "launch",
+            "program": "main_nerf.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [
+                "data/nerf/dataset_big16bit/dataset_big16bit_train", 
+                "--workspace", "trial_nerf_one_mlp_8_layers", 
+                "-O", 
+                "--iters", "60000",
+                "--max_steps", "1", "--num_steps", "1", 
+                "--radius", "2",
+                "--bound", "4",
+                "--color_space", "linear"
+            ]
+        },
+        {
+            "name": "Python: Main NeRF GUI",
+            "type": "python",
+            "request": "launch",
+            "program": "main_nerf.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [
+                "data/nerf/dataset_big16bit/dataset_big16bit_train", 
+                "--workspace", "trial_nerf_one_mlp_8_layers", 
+                "-O", "--gui", 
+                "--max_steps", "1", "--num_steps", "1", 
+                "--radius", "2",
+                "--bound", "4",
+                "--color_space", "linear"
+            ]
+        },
+        {
+            "name": "Python: Main NeRF Test",
+            "type": "python",
+            "request": "launch",
+            "program": "main_nerf.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [
+                "data/nerf/dataset_big16bit/dataset_big16bit_test", 
+                "--workspace", "trial_nerf_one_mlp_8_layers", 
+                "-O", "--test", 
+                "--max_steps", "1", "--num_steps", "1", 
+                "--radius", "2",
+                "--bound", "4",
+                "--color_space", "linear"
+            ]
+        }
+    ]
+}
