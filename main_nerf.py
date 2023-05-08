@@ -123,7 +123,7 @@ if __name__ == '__main__':
             gui.render()
         
         else:
-            test_loader = NeRFDataset(opt, device=device, type='test', downscale=4).dataloader()
+            test_loader = NeRFDataset(opt, device=device, type='test', downscale=1).dataloader()
 
             # if test_loader.has_gt:
             #     trainer.evaluate(test_loader) # blender has gt, so evaluate it.

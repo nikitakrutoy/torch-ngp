@@ -166,6 +166,11 @@ class NeRFRenderer(nn.Module):
             z_vals_neg[~bg_mask] = (1 - gt[~bg_mask]) * z_vals_neg[~bg_mask]
             z_vals = near + z_vals_neg * (far - near)
             z_vals_neg[bg_mask] = -1 * z_vals_neg[bg_mask]
+
+            z_vals = z_vals[:, : num_steps // 2]
+            z_vals_neg = z_vals_neg[:, : num_steps // 2]
+
+
             gt = (gt + z_vals_neg).clamp(0, 1).view(-1, 1) # 0 + [0, 1] = [0, 1]
 
             xyzs = rays_o.unsqueeze(-2) + rays_d.unsqueeze(-2) * z_vals.unsqueeze(-1) # [N, 1, 3] * [N, T, 1] -> [N, T, 3]
@@ -173,7 +178,7 @@ class NeRFRenderer(nn.Module):
             dirs = rays_d.view(-1, 1, 3).expand_as(xyzs)
 
 
-            bg_mask = bg_mask.reshape(-1, 1).expand((N, num_steps)).reshape(-1, 1)
+            bg_mask = bg_mask.reshape(-1, 1).expand((N, num_steps // 2)).reshape(-1, 1)
 
 
             # perturb z_vals

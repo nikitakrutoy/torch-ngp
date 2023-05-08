@@ -226,11 +226,14 @@ class NeRFDataset:
             #     elif type == 'val':
             #         frames = frames[:1]
                 # else 'all' or 'trainval' : use all frames
-            L = 700
+            L = 12000
             frames = frames[:L]
             self.poses = []
             self.images = torch.zeros((L, self.H, self.W, 3))
-            for i, f in enumerate(tqdm.tqdm(frames, desc=f'Loading {type} data')):
+            ids = np.arange(len(frames))
+            np.random.shuffle(ids)
+            for i, fid in enumerate(tqdm.tqdm(ids[:L], desc=f'Loading {type} data')):
+                f = frames[fid]
                 f_path = os.path.join(self.root_path, f['file_path'])
                 if self.mode == 'blender' and '.' not in os.path.basename(f_path):
                     f_path += '.png' # so silly...
