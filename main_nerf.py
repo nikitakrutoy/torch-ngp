@@ -87,7 +87,7 @@ if __name__ == '__main__':
         assert opt.bg_radius <= 0, "background model is not implemented for --tcnn"
         from nerf.network_tcnn import NeRFNetwork
     else:
-        from nerf.network import NeTFMLP4 as NeRFNetwork 
+        from nerf.network import KiloNeTF as NeRFNetwork 
 
     print(opt)
     

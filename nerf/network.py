@@ -438,6 +438,287 @@ class NeTFMLP4(NeRFRenderer):
             params.append({'params': self.bg_net.parameters(), 'lr': lr})
         
         return params
+    
+class KiloNeTF(NeRFRenderer):
+
+    def __init__(self,
+                 encoding="hashgrid",
+                 encoding_dir="sphere_harmonics",
+                 encoding_bg="hashgrid",
+                 resblock_in_dim=512,
+                 resblock_num_layers=2,
+                 resblock_hidden_dim=512,
+                 resblock_num=2,
+                 num_layers_bg=2,
+                 hidden_dim_bg=128,
+                 resolution=2,
+                 bound=1,
+                 **kwargs,
+                ):
+        super().__init__(bound, **kwargs)
+        
+        # sigma network
+        self.resblock_num = resblock_num
+        self.resblock_in_dim = resblock_in_dim
+        self.resblock_hidden_dim = resblock_hidden_dim
+        self.encoder, self.in_dim = get_encoder(encoding, desired_resolution=2048 * bound)
+        self.encoder_dir, self.in_dim_dir = get_encoder(encoding_dir, degree=4)
+
+        self.bound = bound
+        self.resolution = resolution
+
+        self.interpolate = False
+        self.CP = 8
+        self.CD = 4
+        self.sigma_nets = []
+        for _ in range(resolution * resolution * resolution):
+            sigma_net = []
+            for l in range(resblock_num + 2):
+                if l == 0:
+                    in_dim = self.in_dim
+                    out_dim = self.resblock_in_dim
+                    sigma_net.append(nn.Linear(in_dim, out_dim, bias=True))
+                    # sigma_net.append(nn.BatchNorm1d(num_features=out_dim))
+                    sigma_net.append(nn.LeakyReLU())
+                elif l == resblock_num + 1:
+                    in_dim = self.resblock_in_dim
+                    out_dim = 8
+                    sigma_net.append(nn.Linear(in_dim, out_dim, bias=True))
+                    # sigma_net.append(nn.BatchNorm1d(num_features=out_dim))
+
+                else:
+                    sigma_net.append(ResidualBlock(resblock_num_layers, resblock_in_dim, resblock_hidden_dim))
+                    # sigma_net.append(nn.BatchNorm1d(num_features=resblock_in_dim))
+
+            self.sigma_nets.append(nn.ModuleList(sigma_net))
+        self.sigma_nets = nn.ModuleList(self.sigma_nets)
+        
+        self.gamma_nets = []
+        for _ in range(resolution * resolution * resolution):
+            gamma_net = []
+            for l in range(resblock_num + 2):
+                if l == 0:
+                    in_dim = self.in_dim_dir
+                    out_dim = self.resblock_in_dim
+                    gamma_net.append(nn.Linear(in_dim, out_dim, bias=True))
+                    # sigma_net.append(nn.BatchNorm1d(num_features=out_dim))
+                    gamma_net.append(nn.LeakyReLU())
+                elif l == resblock_num + 1:
+                    in_dim = self.resblock_in_dim
+                    out_dim = 8
+                    gamma_net.append(nn.Linear(in_dim, out_dim, bias=True))
+                    # sigma_net.append(nn.BatchNorm1d(num_features=out_dim))
+
+                else:
+                    gamma_net.append(ResidualBlock(resblock_num_layers, resblock_in_dim, resblock_hidden_dim))
+                    # sigma_net.append(nn.BatchNorm1d(num_features=resblock_in_dim))
+            gamma_net = nn.ModuleList(gamma_net)
+            self.gamma_nets.append(gamma_net)
+        self.gamma_nets = nn.ModuleList(self.gamma_nets)
+
+        # background network
+        if self.bg_radius > 0:
+            self.num_layers_bg = num_layers_bg        
+            self.hidden_dim_bg = hidden_dim_bg
+            self.encoder_bg, self.in_dim_bg = get_encoder(encoding_bg, input_dim=2, num_levels=4, log2_hashmap_size=19, desired_resolution=2048) # much smaller hashgrid 
+            
+            bg_net = []
+            for l in range(num_layers_bg):
+                if l == 0:
+                    in_dim = self.in_dim_bg + self.in_dim_dir
+                else:
+                    in_dim = hidden_dim_bg
+                
+                if l == num_layers_bg - 1:
+                    out_dim = 3 # 3 rgb
+                else:
+                    out_dim = hidden_dim_bg
+                
+                bg_net.append(nn.Linear(in_dim, out_dim, bias=False))
+
+            self.bg_net = nn.ModuleList(bg_net)
+        else:
+            self.bg_net = None
+
+    def interpolate_pos(self, x):
+        N = 2048
+        L = (4 * 0.33) * 2
+        K = L / N
+        coords = []
+        for foo in [torch.ceil, torch.floor]:
+            for bar in [torch.ceil, torch.floor]:
+                for mas in [torch.ceil, torch.floor]:
+                    coords.append(
+                        torch.stack([
+                            foo(x[:, 0] / K) * K, 
+                            bar(x[:, 1] / K) * K, 
+                            mas(x[:, 2] / K) * K
+                        ]).transpose(0, 1)
+                    )
+        C = self.CP
+        X = torch.zeros(x.shape[0] * C, x.shape[1]).to("cuda")
+        for i in range(C):
+            X[i::C] = coords[i]
+        diff = X.view(x.shape[0], C, x.shape[1]) - x.view(x.shape[0], 1, x.shape[1]).expand((x.shape[0], C, x.shape[1]))
+        area = diff.abs().prod(dim=2) 
+        weights = area / (K ** 3)
+        return X, weights
+    
+    def interpolate_dir(self, d):
+        z = d[:, 2]
+        y = d[:, 1]
+        x = d[:, 0]
+        theta = torch.acos(z) % (2 * torch.pi)
+        phi = torch.atan2(y, x) % (2 * torch.pi)
+        d2 = torch.vstack([theta, phi]).transpose(0, 1)
+        N = 2048
+        L = 2 * torch.pi
+        K = L / N
+        coords = []
+        for foo in [torch.ceil, torch.floor]:
+            for bar in [torch.ceil, torch.floor]:
+                    coords.append(
+                        torch.stack([
+                            foo(d2[:, 0] / K) * K, 
+                            bar(d2[:, 1] / K) * K 
+                        ]).transpose(0, 1)
+                    )
+        C = self.CD
+        D = torch.zeros(d.shape[0] * C, 2).to("cuda")
+        for i in range(C):
+            D[i::C] = coords[i]
+        diff = D.view(d2.shape[0], C, d2.shape[1]) - d2.view(d2.shape[0], 1, d2.shape[1]).expand((d2.shape[0], C, d2.shape[1]))
+        area = diff.abs().prod(dim=2) 
+        weights = area / (K ** 2)
+
+        theta = D[:, 0]
+        phi = D[:, 1]
+        x = torch.sin(theta) * torch.cos(phi)
+        y = torch.sin(theta) * torch.sin(phi)
+        z = torch.cos(theta)
+        D = torch.stack([x, y, z]).transpose(0, 1)
+        return D, weights
+    
+    def forward(self, x, d):
+        x_ = torch.floor(x / (2 * self.bound / self.resolution)) + self.resolution // 2
+        x_ = torch.clamp(x_, 0, self.resolution)
+        x_ = x_[:, 0] * self.resolution * self.resolution + x_[:, 1] * self.resolution + x_[:, 2]
+        result = torch.zeros((x.shape[0])).to("cuda")
+        color = torch.zeros((x.shape[0], 3)).to("cuda")
+        for bid in torch.unique(x_):
+        # for bid in [30]:
+            # print(bid)
+            pos = x[x_ == bid]
+            dir = d[x_ == bid]
+            result_, color_ = self.forward_(pos, dir, int(bid))
+            result[x_ == bid] = result_
+            color[x_ == bid] = color_
+
+        return result, color
+    
+    def forward_(self, x, d, i):
+        # x: [N, 3], in [-bound, bound]
+        # d: [N, 3], nomalized in [-1, 1]
+
+                # x: [N, 3], in [-bound, bound]
+        # d: [N, 3], nomalized in [-1, 1]
+        if self.interpolate:
+            x, weights_pos = self.interpolate_pos(x)
+            d, weights_dir = self.interpolate_dir(d)
+
+        # sigma
+        x = self.encoder(x, bound=self.bound)
+        d = self.encoder_dir(d)
+
+        h = x.clone()
+        for l in range(len(self.sigma_nets[i])):
+            h = self.sigma_nets[i][l](h)
+            if torch.any(torch.isnan(h)):
+                print("Got nans")
+                # exit(1)
+            # if l != self.resblock_num + 1:
+            #     h = F.leaky_relu(h, inplace=True)
+        # sigma = h[..., 0]
+        sigma = h.clone()
+        
+
+        h = d.clone()
+        for l in range(len(self.gamma_nets[i])):
+            h = self.gamma_nets[i][l](h)
+            if torch.any(torch.isnan(h)):
+                print("Got nans")
+                # exit(1)
+            # if l != self.resblock_num + 1:
+            #     h = F.leaky_relu(h, inplace=True)
+        # gamma = h[..., 0]
+        gamma = h.clone()
+
+        if self.interpolate:
+            weights_pos = weights_pos\
+                .view(sigma.shape[0] // self.CP, self.CP, 1)\
+                .expand((sigma.shape[0] // self.CP, self.CP, sigma.shape[1]))
+            sigma = sigma.view(sigma.shape[0] // self.CP, self.CP, sigma.shape[1]) 
+            sigma = (sigma * weights_pos).sum(dim=1)
+
+            weights_dir = weights_dir\
+                .view(gamma.shape[0] // self.CD, self.CD, 1)\
+                .expand((gamma.shape[0] // self.CD, self.CD, gamma.shape[1]))
+            gamma = gamma.view(gamma.shape[0] // self.CD, self.CD, gamma.shape[1])
+            gamma = (gamma * weights_dir).sum(dim=1)
+
+
+        result = (sigma * gamma).sum(-1)
+        
+
+        #sigma = F.relu(h[..., 0])
+        # sigma = trunc_exp(h[..., 0])
+        # geo_feat = h[..., 1:]
+        result_ = result.unsqueeze(-1)
+        color = torch.hstack([result_, result_, result_])
+
+        return result, color
+
+    def background(self, x, d):
+        # x: [N, 2], in [-1, 1]
+
+        h = self.encoder_bg(x) # [N, C]
+        d = self.encoder_dir(d)
+
+        h = torch.cat([d, h], dim=-1)
+        for l in range(self.num_layers_bg):
+            h = self.bg_net[l](h)
+            if l != self.num_layers_bg - 1:
+                h = F.relu(h, inplace=True)
+        
+        # sigmoid activation for rgb
+        rgbs = torch.sigmoid(h)
+
+        return rgbs
+
+    def density(self, x, d):
+        # x: [N, 3], in [-bound, bound]
+        result = self.forward(x, d)
+        return {
+            'sigma': result[0],
+            'color': result[1]
+        }
+
+
+    def get_params(self, lr):
+
+        params = [
+            {'params': self.encoder.parameters(), 'lr': lr},
+            {'params': self.encoder_dir.parameters(), 'lr': lr},
+        ] + [
+            {'params': net.parameters(), 'lr': lr} for net in self.sigma_nets
+        ] + [
+            {'params': net.parameters(), 'lr': lr} for net in self.gamma_nets
+        ]
+        if self.bg_radius > 0:
+            params.append({'params': self.encoder_bg.parameters(), 'lr': lr})
+            params.append({'params': self.bg_net.parameters(), 'lr': lr})
+        
+        return params
 
 
 
