@@ -454,6 +454,8 @@ class Trainer(object):
 
         if self.opt.color_space == 'linear':
             images[..., :3] = srgb_to_linear(images[..., :3])
+            # k = 5.0
+            # images[..., :3] = torch.exp(images[..., :3] * k - k)
 
         if C == 3 or self.model.bg_radius > 0:
             bg_color = 1
@@ -477,6 +479,8 @@ class Trainer(object):
 
         # MSE loss
         loss = self.criterion(pred_rgb, gt_rgb).mean(-1) # [B, N, 3] --> [B, N]
+        if torch.isnan(loss):
+            print(1)
 
         # patch-based rendering
         if self.opt.patch_size > 1:
@@ -566,8 +570,10 @@ class Trainer(object):
 
         outputs = self.model.render(rays_o, rays_d, staged=True, bg_color=bg_color, perturb=perturb, **vars(self.opt))
 
-        pred_rgb = outputs['image'].reshape(-1, H, W, 3)
-        pred_depth = outputs['depth'].reshape(-1, H, W)
+        # pred_rgb = outputs['image'].reshape(-1, H, W, 3)
+        # pred_depth = outputs['depth'].reshape(-1, H, W)
+        pred_rgb = torch.sigmoid(outputs['image']).reshape(-1, H, W, 3)
+        pred_depth = torch.sigmoid(outputs['depth']).reshape(-1, H, W)
 
         return pred_rgb, pred_depth
 
@@ -637,6 +643,7 @@ class Trainer(object):
             name = f'{self.name}_ep{self.epoch:04d}'
 
         os.makedirs(save_path, exist_ok=True)
+        os.makedirs(save_path + "\screenshots", exist_ok=True)
         
         self.log(f"==> Start Test, save results to {save_path}")
 
@@ -657,15 +664,19 @@ class Trainer(object):
                 if self.opt.color_space == 'linear':
                     preds = linear_to_srgb(preds)
 
-                pred = preds[0].detach().cpu().numpy()
-                pred = (pred * 255).astype(np.uint8)
+                # pred = preds[0].detach().cpu().numpy()
+                pred = (1 - preds[0]).detach().cpu().numpy()
+                pred = (pred * 255)
 
-                pred_depth = preds_depth[0].detach().cpu().numpy()
+                # pred_depth = preds_depth[0].detach().cpu().numpy()
+                pred_depth = (1 - preds_depth[0]).detach().cpu().numpy()
                 pred_depth = (pred_depth * 255).astype(np.uint8)
                 if "images" in data:
-                    img = data["images"].squeeze(0) * 255
+                    # img = data["images"].squeeze(0) * 255
+                    img = (data["images"].squeeze(0) * 255)
                     # img = img / 2**16 * 255
-                    grid = make_grid([img.cpu().permute(2, 1, 0), torch.tensor(pred).permute(2, 1, 0)]).permute(1, 2, 0).numpy().astype(np.uint8)
+                    grid = make_grid([img.cpu().permute(2, 0, 1), torch.tensor(pred).permute(2, 0, 1)]).permute(1, 2, 0).numpy().astype(np.uint8)
+                    cv2.imwrite(os.path.join(save_path + "\screenshots", f'{name}_{i:04d}_rgb.png'), grid)
                 if write_video:
                     all_preds.append(grid)
                     all_preds_depth.append(pred_depth)
@@ -716,8 +727,10 @@ class Trainer(object):
 
             with torch.cuda.amp.autocast(enabled=self.fp16):
                 preds, truths, loss = self.train_step(data)
-         
+
+
             self.scaler.scale(loss).backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
             self.scaler.step(self.optimizer)
             self.scaler.update()
             

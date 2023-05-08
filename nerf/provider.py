@@ -92,7 +92,7 @@ def rand_poses(size, device, radius=1, theta_range=[np.pi/3, 2*np.pi/3], phi_ran
 
 
 class NeRFDataset:
-    def __init__(self, opt, device, type='train', downscale=1, n_test=100, one_sample_per_ray=False):
+    def __init__(self, opt, device, type='train', downscale=1, n_test=10, one_sample_per_ray=False):
         super().__init__()
         
         self.opt = opt
@@ -164,10 +164,17 @@ class NeRFDataset:
         
         # for colmap, manually interpolate a test set.
         if self.mode == 'colmap' and type == 'test':
-            fs = np.random.choice(frames, n_test, replace=False)
+            # frames = frames[0::2]
+            # fs = np.random.choice(frames, n_test, replace=False)
+            # fs = frames[700:700 + n_test]
+            fs = frames[:n_test]
+            # fs = frames[225 - n_test: 225]
+
             self.poses = []
-            self.images = []
-            for f in fs:
+            # self.images = []
+            L = n_test
+            self.images = torch.zeros((L, self.H, self.W, 3))
+            for i, f in enumerate(fs):
                 pose = nerf_matrix_to_ngp(np.array(f['transform_matrix'], dtype=np.float32), scale=self.scale, offset=self.offset)
                 f_path = os.path.join(self.root_path, f['file_path'])
 
@@ -186,12 +193,15 @@ class NeRFDataset:
 
                 if image.shape[0] != self.H or image.shape[1] != self.W:
                     image = cv2.resize(image, (self.W, self.H), interpolation=cv2.INTER_AREA)
-                maxv = 2**16 if image.dtype == np.uint16 else 2**8
+                image = image[:, :, :3]
+                maxv = (2**16 if image.dtype == np.uint16 else 2**8) - 1
                 image = image.astype(np.float32) / maxv# [H, W, 3/4]
 
 
                 self.poses.append(pose)
-                self.images.append(image.astype(np.float32))
+                # self.images.append(image.astype(np.float32))
+                self.images[i] = torch.from_numpy(image.astype(np.float32))
+
             # choose two random poses, and interpolate between.
             # f0, f1 = np.random.choice(frames, 2, replace=False)
             # pose0 = nerf_matrix_to_ngp(np.array(f0['transform_matrix'], dtype=np.float32), scale=self.scale, offset=self.offset) # [4, 4]
@@ -210,16 +220,17 @@ class NeRFDataset:
 
         else:
             # for colmap, manually split a valid set (the first frame).
-            if self.mode == 'colmap':
-                if type == 'train':
-                    frames = frames[1:]
-                elif type == 'val':
-                    frames = frames[:1]
+            # if self.mode == 'colmap':
+            #     if type == 'train':
+            #         frames = frames[1:]
+            #     elif type == 'val':
+            #         frames = frames[:1]
                 # else 'all' or 'trainval' : use all frames
-            frames = frames[::3]
+            L = 700
+            frames = frames[:L]
             self.poses = []
-            self.images = []
-            for f in tqdm.tqdm(frames, desc=f'Loading {type} data'):
+            self.images = torch.zeros((L, self.H, self.W, 3))
+            for i, f in enumerate(tqdm.tqdm(frames, desc=f'Loading {type} data')):
                 f_path = os.path.join(self.root_path, f['file_path'])
                 if self.mode == 'blender' and '.' not in os.path.basename(f_path):
                     f_path += '.png' # so silly...
@@ -246,16 +257,16 @@ class NeRFDataset:
 
                 if image.shape[0] != self.H or image.shape[1] != self.W:
                     image = cv2.resize(image, (self.W, self.H), interpolation=cv2.INTER_AREA)
-                maxv = 2**16 if image.dtype == np.uint16 else 2**8
-                image = image.astype(np.float32) / maxv# [H, W, 3/4]
+                maxv = (2**16 if image.dtype == np.uint16 else 2**8) - 1
+                image = 1 - image.astype(np.float32) / maxv# [H, W, 3/4]
 
 
                 self.poses.append(pose)
-                self.images.append(image.astype(np.float32))
+                self.images[i] = torch.from_numpy(image.astype(np.float32))
             
         self.poses = torch.from_numpy(np.stack(self.poses, axis=0)) # [N, 4, 4]
-        if self.images is not None:
-            self.images = torch.from_numpy(np.stack(self.images, axis=0)) # [N, H, W, C]
+        # if self.images is not None:
+        #     self.images = torch.from_numpy(np.stack(self.images, axis=0)) # [N, H, W, C]
         
         # calculate mean radius of all camera poses
         self.radius = self.poses[:, :3, 3].norm(dim=-1).mean(0).item()

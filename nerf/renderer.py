@@ -145,18 +145,28 @@ class NeRFRenderer(nn.Module):
         #print(f'nears = {nears.min().item()} ~ {nears.max().item()}, fars = {fars.min().item()} ~ {fars.max().item()}')
         thres = 1e-3
         scale = 0.33
-        mist_depth = 7 * scale
+        mist_depth_unscaled = 12
+        mist_depth = mist_depth_unscaled * scale
+        mist_start_unscaled = 0.87
+        mist_start = mist_start_unscaled * scale
+        near = mist_start
+        far = mist_depth + mist_start
 
         if gt is not None:
             gt = gt.squeeze(0)[:, 0].unsqueeze(-1)
             bg_mask = (gt <= thres).reshape(-1)
             gt[bg_mask] = 0.0
+            random_offsets = torch.rand_like(gt[~bg_mask])
 
             z_vals = torch.linspace(0.0, 1.0, num_steps, device=device).unsqueeze(0) # [1, T]
             z_vals = z_vals.expand((N, num_steps)) # [N, T]
+            z_vals_neg = z_vals.clone()
+            z_vals = z_vals.clone()
             z_vals[~bg_mask] = gt[~bg_mask] * z_vals[~bg_mask] # [N, T], in [nears, fars]
-            gt = (gt - z_vals).clamp(0, 1).view(-1, 1)
-            z_vals = z_vals  *  mist_depth
+            z_vals_neg[~bg_mask] = (1 - gt[~bg_mask]) * z_vals_neg[~bg_mask]
+            z_vals = near + z_vals_neg * (far - near)
+            z_vals_neg[bg_mask] = -1 * z_vals_neg[bg_mask]
+            gt = (gt + z_vals_neg).clamp(0, 1).view(-1, 1) # 0 + [0, 1] = [0, 1]
 
             xyzs = rays_o.unsqueeze(-2) + rays_d.unsqueeze(-2) * z_vals.unsqueeze(-1) # [N, 1, 3] * [N, T, 1] -> [N, T, 3]
             xyzs = torch.min(torch.max(xyzs, aabb[:3]), aabb[3:]) # a manual clip.
@@ -175,7 +185,7 @@ class NeRFRenderer(nn.Module):
             # generate xyzs
 
         else:
-            xyzs = rays_o.unsqueeze(-2)
+            xyzs = rays_o.unsqueeze(-2) + rays_d.unsqueeze(-2) * near
             xyzs = torch.min(torch.max(xyzs, aabb[:3]), aabb[3:]) # a manual clip.
             dirs = rays_d.view(-1, 1, 3).expand_as(xyzs)
 
@@ -255,17 +265,43 @@ class NeRFRenderer(nn.Module):
             image = image.view(*prefix, 3)
             depth = depth.view(*prefix)
         else:
-            depth_good = density_outputs["sigma"].view(-1, 1)[~bg_mask]
-            depth_bad = density_outputs["sigma"].view(-1, 1)[bg_mask]
-            depth = torch.concat([depth_good, depth_bad[:depth_good.shape[0]]]).view(-1, 1)
-            # depth = density_outputs["sigma"].view(-1, 1)
-            # depth = depth_good.view(-1, 1)
+            bg_mult = 1
+            depth_fg = density_outputs["sigma"].view(-1, 1)[~bg_mask]
+            depth_bg = density_outputs["sigma"].view(-1, 1)[bg_mask]
+            fg_size = (~bg_mask).sum()
+            bg_size = (bg_mask).sum()
+            if fg_size > 0 and bg_size > 0:
+                bg_size = min(bg_size, int(fg_size/ bg_mult))
+                bg_idx = torch.multinomial(torch.ones_like(depth_bg), bg_size)
+                depth = torch.concat([depth_fg, depth_bg[bg_idx]]).view(-1, 1)
+            elif fg_size > 0:
+                depth = depth_fg
+            elif bg_size > 0:
+                depth = depth_bg
+            else:
+                raise Exception("popopo")
 
-            gt_good = gt[~bg_mask]
-            gt_bad = gt[bg_mask]
-            gt = torch.concat([gt_good, gt_bad[:gt_good.shape[0]]]).view(-1, 1)
+            if depth.size()[0] == 0:
+                print(3)
+            # depth = density_outputs["sigma"].view(-1, 1)
+            # depth = depth_fg.view(-1, 1)
+            # image = depth
+            # k = 5.0
+            # depth = torch.exp(depth * k - k)
+
+            gt_fg = gt[~bg_mask]
+            gt_bg = gt[bg_mask]
+            if fg_size > 0 and bg_size > 0:
+                gt = torch.concat([gt_fg, gt_bg[bg_idx]]).view(-1, 1)
+            elif fg_size > 0:
+                gt = gt_fg
+            elif bg_size > 0:
+                gt = gt_bg
+            else:
+                raise Exception("popopo_gt")
+
             # gt = gt.view(-1, 1)
-            # gt = gt_good.view(-1, 1)
+            # gt = gt_fg.view(-1, 1)
             image = depth
 
         # mix background color
@@ -284,6 +320,8 @@ class NeRFRenderer(nn.Module):
         # z_vals_shifted = torch.cat([z_vals[..., 1:], sample_dist * torch.ones_like(z_vals[..., :1])], dim=-1)
         # mid_zs = (z_vals + z_vals_shifted) / 2 # [N, T]
         # loss_dist = (torch.abs(mid_zs.unsqueeze(1) - mid_zs.unsqueeze(2)) * (weights.unsqueeze(1) * weights.unsqueeze(2))).sum() + 1/3 * ((z_vals_shifted - z_vals_shifted) * (weights ** 2)).sum()
+        if depth.size()[0] == 0:
+            print(2)
 
         return {
             'depth': depth,

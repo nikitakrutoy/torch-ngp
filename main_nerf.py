@@ -24,9 +24,9 @@ if __name__ == '__main__':
 
     ### training options
     parser.add_argument('--iters', type=int, default=30000, help="training iters")
-    parser.add_argument('--lr', type=float, default=1e-2, help="initial learning rate")
+    parser.add_argument('--lr', type=float, default=4e-3, help="initial learning rate")
     parser.add_argument('--ckpt', type=str, default='latest')
-    parser.add_argument('--num_rays', type=int, default=4096, help="num rays sampled per image for each training step")
+    parser.add_argument('--num_rays', type=int, default=1024, help="num rays sampled per image for each training step")
     parser.add_argument('--cuda_ray', action='store_true', help="use CUDA raymarching instead of pytorch")
     parser.add_argument('--max_steps', type=int, default=1024, help="max num steps sampled per ray (only valid when using --cuda_ray)")
     parser.add_argument('--num_steps', type=int, default=512, help="num steps sampled per ray (only valid when NOT using --cuda_ray)")
@@ -44,7 +44,7 @@ if __name__ == '__main__':
     parser.add_argument('--color_space', type=str, default='srgb', help="Color space, supports (linear, srgb)")
     parser.add_argument('--preload', action='store_true', help="preload all data into GPU, accelerate training but use more GPU memory")
     # (the default value is for the fox dataset)
-    parser.add_argument('--bound', type=float, default=4, help="assume the scene is bounded in box[-bound, bound]^3, if > 1, will invoke adaptive ray marching.")
+    parser.add_argument('--bound', type=float, default=1.33, help="assume the scene is bounded in box[-bound, bound]^3, if > 1, will invoke adaptive ray marching.")
     parser.add_argument('--scale', type=float, default=0.33, help="scale camera location into box[-bound, bound]^3")
     parser.add_argument('--offset', type=float, nargs='*', default=[0, 0, 0], help="offset of camera location")
     parser.add_argument('--dt_gamma', type=float, default=1/128, help="dt_gamma (>=0) for adaptive ray marching. set to 0 to disable, >0 to accelerate rendering (but usually with worse quality)")
@@ -87,7 +87,7 @@ if __name__ == '__main__':
         assert opt.bg_radius <= 0, "background model is not implemented for --tcnn"
         from nerf.network_tcnn import NeRFNetwork
     else:
-        from nerf.network import NeTFMLP2 as NeRFNetwork 
+        from nerf.network import NeTFMLP4 as NeRFNetwork 
 
     print(opt)
     
@@ -105,9 +105,11 @@ if __name__ == '__main__':
     
     print(model)
 
-    criterion = torch.nn.MSELoss(reduction='none')
+    # criterion = torch.nn.MSELoss(reduction='none')
     #criterion = partial(huber_loss, reduction='none')
-    #criterion = torch.nn.HuberLoss(reduction='none', beta=0.1) # only available after torch 1.10 ?
+    criterion = torch.nn.HuberLoss(reduction='none') # only available after torch 1.10 ?
+    criterion = torch.nn.BCEWithLogitsLoss()
+
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
@@ -121,7 +123,7 @@ if __name__ == '__main__':
             gui.render()
         
         else:
-            test_loader = NeRFDataset(opt, device=device, type='test').dataloader()
+            test_loader = NeRFDataset(opt, device=device, type='test', downscale=4).dataloader()
 
             # if test_loader.has_gt:
             #     trainer.evaluate(test_loader) # blender has gt, so evaluate it.
@@ -132,12 +134,19 @@ if __name__ == '__main__':
     
     else:
 
-        optimizer = lambda model: torch.optim.Adam(model.get_params(opt.lr), betas=(0.9, 0.99), eps=1e-15)
+        optimizer = lambda model: torch.optim.AdamW(model.get_params(opt.lr), betas=(0.9, 0.99), eps=1e-15)
 
         train_loader = NeRFDataset(opt, device=device, type='train').dataloader()
 
         # decay to 0.1 * init_lr at last iter step
         scheduler = lambda optimizer: optim.lr_scheduler.LambdaLR(optimizer, lambda iter: 0.1 ** min(iter / opt.iters, 1))
+        # def scheduler(optimizer):
+        #     constant_iters = 1000
+        #     scheduler1 =  optim.lr_scheduler.ConstantLR(optimizer, factor=0.1, total_iters=constant_iters)
+        #     scheduler2 = optim.lr_scheduler.LambdaLR(optimizer, lambda iter: 0.1 ** min(iter / opt.iters, 1))
+        #     scheduler =  optim.lr_scheduler.SequentialLR(optimizer, schedulers=[scheduler1, scheduler2], milestones=[constant_iters])
+        #     return scheduler
+            
 
         metrics = [PSNRMeter(), LPIPSMeter(device=device)]
         trainer = Trainer('ngp', opt, model, device=device, workspace=opt.workspace, optimizer=optimizer, criterion=criterion, ema_decay=0.95, fp16=opt.fp16, lr_scheduler=scheduler, scheduler_update_every_step=True, metrics=metrics, use_checkpoint=opt.ckpt, eval_interval=50)

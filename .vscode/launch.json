@@ -12,13 +12,13 @@
             "console": "integratedTerminal",
             "justMyCode": true,
             "args": [
-                "data/nerf/dataset_big16bit/dataset_big16bit_train", 
-                "--workspace", "trial_nerf_one_mlp_8_layers", 
+                "D:/Documents/torch-ngp/data/nerf/suzanne_16bit_1000images_60fov_12mistd_087mists_4dist/suzanne_16bit_1000images_60fov_12mistd_087mists_4dist_train", 
+                "--workspace", "trial_nerf_resnet", 
                 "-O", 
-                "--iters", "60000",
-                "--max_steps", "1", "--num_steps", "1", 
+                "--iters", "500000",
+                "--max_steps", "1", "--num_steps", "32", "--num_rays", "256", "--lr", "5e-3",
                 "--radius", "2",
-                "--bound", "4",
+                "--bound", "1.33",
                 "--color_space", "linear"
             ]
         },
@@ -31,11 +31,11 @@
             "justMyCode": true,
             "args": [
                 "data/nerf/dataset_big16bit/dataset_big16bit_train", 
-                "--workspace", "trial_nerf_one_mlp_8_layers", 
+                "--workspace", "trial_nerf_resnet", 
                 "-O", "--gui", 
-                "--max_steps", "1", "--num_steps", "1", 
+                "--max_steps", "1", "--num_steps", "4", "--num_rays", "16384",
                 "--radius", "2",
-                "--bound", "4",
+                "--bound", "1.33",
                 "--color_space", "linear"
             ]
         },
@@ -47,12 +47,13 @@
             "console": "integratedTerminal",
             "justMyCode": true,
             "args": [
-                "data/nerf/dataset_big16bit/dataset_big16bit_test", 
-                "--workspace", "trial_nerf_one_mlp_8_layers", 
+                "D:/Documents/torch-ngp/data/nerf/suzanne_16bit_1000images_60fov_12mistd_087mists_4dist/suzanne_16bit_1000images_60fov_12mistd_087mists_4dist_test", 
+                "--workspace", "trial_nerf_resnet", 
                 "-O", "--test", 
-                "--max_steps", "1", "--num_steps", "1", 
+                "--max_steps", "1", "--num_steps", "1", "--num_rays", "16384",
+                
                 "--radius", "2",
-                "--bound", "4",
+                "--bound", "1.33",
                 "--color_space", "linear"
             ]
         }
