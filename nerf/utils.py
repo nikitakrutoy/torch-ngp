@@ -477,10 +477,21 @@ class Trainer(object):
         if "gt" in outputs.keys():
             gt_rgb = outputs['gt']
 
+        bids = outputs["bids"]
+
         # MSE loss
-        loss = self.criterion(pred_rgb, gt_rgb).mean(-1) # [B, N, 3] --> [B, N]
-        if torch.isnan(loss):
-            print(1)
+        losses = []
+        if bids is not None:
+            for bid in torch.unique(bids):
+                loss = self.criterion(pred_rgb[bids == bid], gt_rgb[bids == bid]).mean(-1)
+                losses.append(loss)
+        else:
+            loss = self.criterion(pred_rgb, gt_rgb).mean(-1)
+            losses.append(loss )# [B, N, 3] --> [B, N]
+        for loss in losses:
+            if torch.isnan(loss):
+                print(1)
+        losses = torch.stack(losses)
 
         # patch-based rendering
         if self.opt.patch_size > 1:
@@ -528,7 +539,7 @@ class Trainer(object):
         # loss_ws = - 1e-1 * pred_weights_sum * torch.log(pred_weights_sum) # entropy to encourage weights_sum to be 0 or 1.
         # loss = loss + loss_ws.mean()
 
-        return pred_rgb, gt_rgb, loss
+        return pred_rgb, gt_rgb, losses
 
     def eval_step(self, data):
 
@@ -843,16 +854,19 @@ class Trainer(object):
             self.optimizer.zero_grad()
 
             with torch.cuda.amp.autocast(enabled=self.fp16):
-                preds, truths, loss = self.train_step(data)
-         
-            self.scaler.scale(loss).backward()
+                preds, truths, losses = self.train_step(data)
+
+            for loss in losses:
+                if (torch.isnan(loss) or preds.sum() == 0):
+                    continue
+            self.scaler.scale(losses.sum()).backward()
             self.scaler.step(self.optimizer)
             self.scaler.update()
 
             if self.scheduler_update_every_step:
                 self.lr_scheduler.step()
 
-            loss_val = loss.item()
+            loss_val = losses.mean()
             total_loss += loss_val
 
             if self.local_rank == 0:

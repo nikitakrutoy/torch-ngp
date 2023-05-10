@@ -446,13 +446,14 @@ class KiloNeTF(NeRFRenderer):
                  encoding_dir="sphere_harmonics",
                  encoding_bg="hashgrid",
                  resblock_in_dim=512,
-                 resblock_num_layers=2,
+                 resblock_num_layers=4,
                  resblock_hidden_dim=512,
                  resblock_num=2,
                  num_layers_bg=2,
                  hidden_dim_bg=128,
                  resolution=2,
                  bound=1,
+                 shared_encoders=False,
                  **kwargs,
                 ):
         super().__init__(bound, **kwargs)
@@ -461,9 +462,21 @@ class KiloNeTF(NeRFRenderer):
         self.resblock_num = resblock_num
         self.resblock_in_dim = resblock_in_dim
         self.resblock_hidden_dim = resblock_hidden_dim
-        self.encoder, self.in_dim = get_encoder(encoding, desired_resolution=2048 * bound)
-        self.encoder_dir, self.in_dim_dir = get_encoder(encoding_dir, degree=4)
-
+        self.encoding = encoding
+        self.shader_encoders = shared_encoders
+        if shared_encoders:
+            self.encoder, self.in_dim = get_encoder(encoding, desired_resolution=2048 * bound, degree=4)
+            self.encoder_dir, self.in_dim_dir = get_encoder(encoding_dir, degree=4)
+        else:
+            self.encoders = []
+            self.encoders_dir = []
+            for _ in range(resolution ** 3):
+                encoder, self.in_dim = get_encoder(encoding, desired_resolution=2048 * bound / resolution, degree=4)
+                encoder_dir, self.in_dim_dir = get_encoder(encoding_dir, degree=4)
+                self.encoders_dir.append(encoder_dir)
+                self.encoders.append(encoder)
+            self.encoders = nn.ModuleList(self.encoders)
+            self.encoder_dir = nn.ModuleList(self.encoders_dir)
         self.bound = bound
         self.resolution = resolution
 
@@ -471,7 +484,7 @@ class KiloNeTF(NeRFRenderer):
         self.CP = 8
         self.CD = 4
         self.sigma_nets = []
-        for _ in range(resolution * resolution * resolution):
+        for _ in range(resolution ** 3):
             sigma_net = []
             for l in range(resblock_num + 2):
                 if l == 0:
@@ -494,7 +507,7 @@ class KiloNeTF(NeRFRenderer):
         self.sigma_nets = nn.ModuleList(self.sigma_nets)
         
         self.gamma_nets = []
-        for _ in range(resolution * resolution * resolution):
+        for _ in range(resolution ** 3):
             gamma_net = []
             for l in range(resblock_num + 2):
                 if l == 0:
@@ -601,22 +614,25 @@ class KiloNeTF(NeRFRenderer):
     
     def forward(self, x, d):
         x_ = torch.floor(x / (2 * self.bound / self.resolution)) + self.resolution // 2
-        x_ = torch.clamp(x_, 0, self.resolution)
+        x_ = torch.clamp(x_, 0, self.resolution - 1)
         x_ = x_[:, 0] * self.resolution * self.resolution + x_[:, 1] * self.resolution + x_[:, 2]
+        c = (x_ - self.resolution // 2 + 0.5) * (2 * self.bound / self.resolution)
+        bids = x_.int()
         result = torch.zeros((x.shape[0])).to("cuda")
         color = torch.zeros((x.shape[0], 3)).to("cuda")
-        for bid in torch.unique(x_):
+        for bid in torch.unique(bids):
         # for bid in [30]:
             # print(bid)
             pos = x[x_ == bid]
             dir = d[x_ == bid]
-            result_, color_ = self.forward_(pos, dir, int(bid))
+            centers = c[x_ == bid]
+            result_, color_ = self.forward_(pos, dir, centers, int(bid))
             result[x_ == bid] = result_
             color[x_ == bid] = color_
 
-        return result, color
+        return result, color, bids
     
-    def forward_(self, x, d, i):
+    def forward_(self, x, d, c, i):
         # x: [N, 3], in [-bound, bound]
         # d: [N, 3], nomalized in [-1, 1]
 
@@ -627,8 +643,16 @@ class KiloNeTF(NeRFRenderer):
             d, weights_dir = self.interpolate_dir(d)
 
         # sigma
-        x = self.encoder(x, bound=self.bound)
-        d = self.encoder_dir(d)
+        if self.shader_encoders:
+            x = self.encoder(x, bound=self.bound)
+            d = self.encoder_dir(d)
+        else:
+            if self.encoding == "hashgrid":
+                x = self.encoders[i](x - c, bound=self.bound / self.resolution)
+            else:
+                x = self.encoders[i](x, bound=self.bound / self.resolution)
+            d = self.encoder_dir[i](d)
+
 
         h = x.clone()
         for l in range(len(self.sigma_nets[i])):
@@ -700,20 +724,21 @@ class KiloNeTF(NeRFRenderer):
         result = self.forward(x, d)
         return {
             'sigma': result[0],
-            'color': result[1]
+            'color': result[1],
+            'bids' : result[2]
         }
 
 
     def get_params(self, lr):
-
-        params = [
-            {'params': self.encoder.parameters(), 'lr': lr},
-            {'params': self.encoder_dir.parameters(), 'lr': lr},
-        ] + [
-            {'params': net.parameters(), 'lr': lr} for net in self.sigma_nets
-        ] + [
-            {'params': net.parameters(), 'lr': lr} for net in self.gamma_nets
-        ]
+        if self.shader_encoders:
+            encoder_params = [{'params': self.encoder.parameters(), 'lr': lr}]
+            encoder_dir_params = [{'params': self.encoder_dir.parameters(), 'lr': lr}]
+        else:
+            encoder_params = [{'params': net.parameters(), 'lr': lr} for net in self.encoders]
+            encoder_dir_params = [{'params': net.parameters(), 'lr': lr} for net in self.encoders_dir]
+        params = encoder_params + encoder_dir_params +\
+            [{'params': net.parameters(), 'lr': lr} for net in self.sigma_nets] +\
+            [{'params': net.parameters(), 'lr': lr} for net in self.gamma_nets]
         if self.bg_radius > 0:
             params.append({'params': self.encoder_bg.parameters(), 'lr': lr})
             params.append({'params': self.bg_net.parameters(), 'lr': lr})

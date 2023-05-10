@@ -200,6 +200,7 @@ class NeRFRenderer(nn.Module):
         density_outputs = self.density(xyzs.reshape(-1, 3), dirs.reshape(-1, 3))
         rgbs = density_outputs["color"].view(N, -1, 3)
         depth = density_outputs["sigma"].view(N, -1, 1)
+        bids = density_outputs.get("bids")
 
         # #sigmas = density_outputs['sigma'].view(N, num_steps) # [N, T]
         # for k, v in density_outputs.items():
@@ -309,6 +310,19 @@ class NeRFRenderer(nn.Module):
             # gt = gt_fg.view(-1, 1)
             image = depth
 
+            if bids is not None:
+                bids = bids.view(N, -1, 1)
+                bids_fg = bids[~bg_mask]
+                bids_bg = bids[bg_mask]
+                if fg_size > 0 and bg_size > 0:
+                    bids = torch.concat([bids_fg, bids_bg[bg_idx]]).view(-1, 1)
+                elif fg_size > 0:
+                    bids = bids_fg
+                elif bg_size > 0:
+                    bids = bids_bg
+                else:
+                    raise Exception("popopo_bids")
+
         # mix background color
         if self.bg_radius > 0:
             # use the bg model to calculate bg_color
@@ -325,13 +339,13 @@ class NeRFRenderer(nn.Module):
         # z_vals_shifted = torch.cat([z_vals[..., 1:], sample_dist * torch.ones_like(z_vals[..., :1])], dim=-1)
         # mid_zs = (z_vals + z_vals_shifted) / 2 # [N, T]
         # loss_dist = (torch.abs(mid_zs.unsqueeze(1) - mid_zs.unsqueeze(2)) * (weights.unsqueeze(1) * weights.unsqueeze(2))).sum() + 1/3 * ((z_vals_shifted - z_vals_shifted) * (weights ** 2)).sum()
-        if depth.size()[0] == 0:
-            print(2)
 
         return {
             'depth': depth,
             'image': image,
-            'gt': gt
+            'gt': gt,
+            "bids": bids
+
             # 'weights_sum': weights_sum,
         }
 
