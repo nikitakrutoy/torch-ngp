@@ -446,7 +446,7 @@ class KiloNeTF(NeRFRenderer):
                  encoding_dir="sphere_harmonics",
                  encoding_bg="hashgrid",
                  resblock_in_dim=512,
-                 resblock_num_layers=2,
+                 resblock_num_layers=4,
                  resblock_hidden_dim=512,
                  resblock_num=2,
                  num_layers_bg=2,
@@ -464,19 +464,21 @@ class KiloNeTF(NeRFRenderer):
         self.resblock_hidden_dim = resblock_hidden_dim
         self.encoding = encoding
         self.shader_encoders = shared_encoders
+
+        self.encoder_dir, self.in_dim_dir = get_encoder(encoding_dir, degree=4)
+
         if shared_encoders:
             self.encoder, self.in_dim = get_encoder(encoding, desired_resolution=2048 * bound, degree=4)
-            self.encoder_dir, self.in_dim_dir = get_encoder(encoding_dir, degree=4)
         else:
             self.encoders = []
-            self.encoders_dir = []
+            # self.encoders_dir = []
             for _ in range(resolution ** 3):
                 encoder, self.in_dim = get_encoder(encoding, desired_resolution=2048 * bound / resolution, degree=4, base_resolution=8)
-                encoder_dir, self.in_dim_dir = get_encoder(encoding_dir, degree=4)
-                self.encoders_dir.append(encoder_dir)
+                # encoder_dir, self.in_dim_dir = get_encoder(encoding_dir, degree=4)
+                # self.encoders_dir.append(encoder_dir)
                 self.encoders.append(encoder)
             self.encoders = nn.ModuleList(self.encoders)
-            self.encoder_dir = nn.ModuleList(self.encoders_dir)
+            # self.encoder_dir = nn.ModuleList(self.encoders_dir)
         self.bound = bound
         self.resolution = resolution
 
@@ -506,28 +508,27 @@ class KiloNeTF(NeRFRenderer):
             self.sigma_nets.append(nn.ModuleList(sigma_net))
         self.sigma_nets = nn.ModuleList(self.sigma_nets)
         
-        self.gamma_nets = []
-        for _ in range(resolution ** 3):
-            gamma_net = []
-            for l in range(resblock_num + 2):
-                if l == 0:
-                    in_dim = self.in_dim_dir
-                    out_dim = self.resblock_in_dim
-                    gamma_net.append(nn.Linear(in_dim, out_dim, bias=True))
-                    # sigma_net.append(nn.BatchNorm1d(num_features=out_dim))
-                    gamma_net.append(nn.LeakyReLU())
-                elif l == resblock_num + 1:
-                    in_dim = self.resblock_in_dim
-                    out_dim = 8
-                    gamma_net.append(nn.Linear(in_dim, out_dim, bias=True))
-                    # sigma_net.append(nn.BatchNorm1d(num_features=out_dim))
+        gamma_net = []
+        resblock_num_dir = 2 * resblock_num
+        for l in range(resblock_num_dir + 2):
+            if l == 0:
+                in_dim = self.in_dim_dir
+                out_dim = self.resblock_in_dim
+                gamma_net.append(nn.Linear(in_dim, out_dim, bias=True))
+                # sigma_net.append(nn.BatchNorm1d(num_features=out_dim))
+                gamma_net.append(nn.LeakyReLU())
+            elif l == resblock_num_dir + 1:
+                in_dim = self.resblock_in_dim
+                out_dim = 8
+                gamma_net.append(nn.Linear(in_dim, out_dim, bias=True))
+                # sigma_net.append(nn.BatchNorm1d(num_features=out_dim))
 
-                else:
-                    gamma_net.append(ResidualBlock(resblock_num_layers, resblock_in_dim, resblock_hidden_dim))
-                    # sigma_net.append(nn.BatchNorm1d(num_features=resblock_in_dim))
-            gamma_net = nn.ModuleList(gamma_net)
-            self.gamma_nets.append(gamma_net)
-        self.gamma_nets = nn.ModuleList(self.gamma_nets)
+            else:
+                gamma_net.append(ResidualBlock(resblock_num_layers, resblock_in_dim, resblock_hidden_dim))
+                # sigma_net.append(nn.BatchNorm1d(num_features=resblock_in_dim))
+
+
+        self.gamma_net = nn.ModuleList(gamma_net)
 
         # background network
         if self.bg_radius > 0:
@@ -645,13 +646,14 @@ class KiloNeTF(NeRFRenderer):
         # sigma
         if self.shader_encoders:
             x = self.encoder(x, bound=self.bound)
-            d = self.encoder_dir(d)
         else:
             if self.encoding == "hashgrid":
                 x = self.encoders[i](x - c, bound=self.bound / self.resolution)
             else:
                 x = self.encoders[i](x, bound=self.bound / self.resolution)
-            d = self.encoder_dir[i](d)
+            # d = self.encoder_dir[i](d)
+        d = self.encoder_dir(d)
+        
 
 
         h = x.clone()
@@ -667,8 +669,8 @@ class KiloNeTF(NeRFRenderer):
         
 
         h = d.clone()
-        for l in range(len(self.gamma_nets[i])):
-            h = self.gamma_nets[i][l](h)
+        for l in range(len(self.gamma_net)):
+            h = self.gamma_net[l](h)
             if torch.any(torch.isnan(h)):
                 print("Got nans")
                 # exit(1)
@@ -730,15 +732,17 @@ class KiloNeTF(NeRFRenderer):
 
 
     def get_params(self, lr):
+        encoder_dir_params = [{'params': self.encoder_dir.parameters(), 'lr': lr}]
+
         if self.shader_encoders:
             encoder_params = [{'params': self.encoder.parameters(), 'lr': lr}]
-            encoder_dir_params = [{'params': self.encoder_dir.parameters(), 'lr': lr}]
         else:
             encoder_params = [{'params': net.parameters(), 'lr': lr} for net in self.encoders]
-            encoder_dir_params = [{'params': net.parameters(), 'lr': lr} for net in self.encoders_dir]
+            # encoder_dir_params = [{'params': net.parameters(), 'lr': lr} for net in self.encoders_dir]
         params = encoder_params + encoder_dir_params +\
-            [{'params': net.parameters(), 'lr': lr} for net in self.sigma_nets] +\
-            [{'params': net.parameters(), 'lr': lr} for net in self.gamma_nets]
+            [{'params': self.gamma_net.parameters(), 'lr': lr}] +\
+            [{'params': net.parameters(), 'lr': lr} for net in self.sigma_nets]
+            # [{'params': net.parameters(), 'lr': lr} for net in self.gamma_nets]
         if self.bg_radius > 0:
             params.append({'params': self.encoder_bg.parameters(), 'lr': lr})
             params.append({'params': self.bg_net.parameters(), 'lr': lr})
