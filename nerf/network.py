@@ -446,7 +446,7 @@ class KiloNeTF(NeRFRenderer):
                  encoding_dir="sphere_harmonics",
                  encoding_bg="hashgrid",
                  resblock_in_dim=512,
-                 resblock_num_layers=4,
+                 resblock_num_layers=2,
                  resblock_hidden_dim=512,
                  resblock_num=2,
                  num_layers_bg=2,
@@ -471,7 +471,7 @@ class KiloNeTF(NeRFRenderer):
             self.encoders = []
             self.encoders_dir = []
             for _ in range(resolution ** 3):
-                encoder, self.in_dim = get_encoder(encoding, desired_resolution=2048 * bound / resolution, degree=4)
+                encoder, self.in_dim = get_encoder(encoding, desired_resolution=2048 * bound / resolution, degree=4, base_resolution=8)
                 encoder_dir, self.in_dim_dir = get_encoder(encoding_dir, degree=4)
                 self.encoders_dir.append(encoder_dir)
                 self.encoders.append(encoder)
@@ -615,8 +615,8 @@ class KiloNeTF(NeRFRenderer):
     def forward(self, x, d):
         x_ = torch.floor(x / (2 * self.bound / self.resolution)) + self.resolution // 2
         x_ = torch.clamp(x_, 0, self.resolution - 1)
-        x_ = x_[:, 0] * self.resolution * self.resolution + x_[:, 1] * self.resolution + x_[:, 2]
         c = (x_ - self.resolution // 2 + 0.5) * (2 * self.bound / self.resolution)
+        x_ = x_[:, 0] * self.resolution * self.resolution + x_[:, 1] * self.resolution + x_[:, 2]
         bids = x_.int()
         result = torch.zeros((x.shape[0])).to("cuda")
         color = torch.zeros((x.shape[0], 3)).to("cuda")

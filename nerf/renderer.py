@@ -311,7 +311,7 @@ class NeRFRenderer(nn.Module):
             image = depth
 
             if bids is not None:
-                bids = bids.view(N, -1, 1)
+                bids = bids.view(-1, 1)
                 bids_fg = bids[~bg_mask]
                 bids_bg = bids[bg_mask]
                 if fg_size > 0 and bg_size > 0:
