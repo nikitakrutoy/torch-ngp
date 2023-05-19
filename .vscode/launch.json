@@ -1,0 +1,74 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Main SDF",
+            "type": "python",
+            "request": "launch",
+            "program": "main_sdf.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [
+                "C:/Users/nikit/Documents/torch-ngp/data/sdf/sponza.obj", 
+                "--workspace", "trial_sdf", 
+                "--fp16", 
+            ]
+        },
+        {
+            "name": "Python: Main NeRF",
+            "type": "python",
+            "request": "launch",
+            "program": "main_nerf.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [
+                "C:/Users/nikitakrutoy/Documents/torch-ngp/data/nerf/suzanne_16bit_16k_images_60fov_12mistd_087mists/suzanne_16bit_16k_images_60fov_12mistd_087mists_train", 
+                "--workspace", "trial_nerf_resnet", 
+                "-O", 
+                "--iters", "500000",
+                "--max_steps", "1", "--num_steps", "2", "--num_rays", "1024", "--lr", "1e-3",
+                "--radius", "2",
+                "--bound", "1.33",
+                "--color_space", "linear"
+            ]
+        },
+        {
+            "name": "Python: Main NeRF GUI",
+            "type": "python",
+            "request": "launch",
+            "program": "main_nerf.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [
+                "data/nerf/dataset_big16bit/dataset_big16bit_train", 
+                "--workspace", "trial_nerf_resnet", 
+                "-O", "--gui", 
+                "--max_steps", "1", "--num_steps", "4", "--num_rays", "16384",
+                "--radius", "2",
+                "--bound", "1.33",
+                "--color_space", "linear"
+            ]
+        },
+        {
+            "name": "Python: Main NeRF Test",
+            "type": "python",
+            "request": "launch",
+            "program": "main_nerf.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [
+                "C:/Users/nikitakrutoy//Documents/torch-ngp/data/nerf/suzanne_16bit_16k_images_60fov_12mistd_087mists/suzanne_16bit_16k_images_60fov_12mistd_087mists_train", 
+                "--workspace", "trial_nerf_resnet", 
+                "-O", "--test", 
+                "--max_steps", "1", "--num_steps", "1", "--num_rays", "16384",
+                
+                "--radius", "2",
+                "--bound", "1.33",
+                "--color_space", "linear"
+            ]
+        }
+    ]
+}

@@ -30,10 +30,10 @@ import packaging
 
 def custom_meshgrid(*args):
     # ref: https://pytorch.org/docs/stable/generated/torch.meshgrid.html?highlight=meshgrid#torch.meshgrid
-    if packaging.version.parse(torch.__version__) < packaging.version.parse('1.10'):
-        return torch.meshgrid(*args)
-    else:
-        return torch.meshgrid(*args, indexing='ij')
+    # if packaging.version.parse(torch.__version__) < packaging.version.parse('1.10'):
+    #     return torch.meshgrid(*args)
+    # else:
+    return torch.meshgrid(*args, indexing='ij')
 
 
 def seed_everything(seed):
