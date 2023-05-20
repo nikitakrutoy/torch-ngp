@@ -3,6 +3,9 @@ import argparse
 
 from sdf.utils import *
 
+def scale_fn(i):
+    return 0.99 ** i
+
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
@@ -27,7 +30,7 @@ if __name__ == '__main__':
         assert opt.fp16, "tcnn mode must be used with fp16 mode"
         from sdf.network_tcnn import SDFNetwork        
     else:
-        from sdf.netowrk import SDFNetwork
+        from sdf.netowrk import SqueezeSDFNetwork as SDFNetwork
 
     model = SDFNetwork(encoding="hashgrid")
     print(model)
@@ -40,7 +43,7 @@ if __name__ == '__main__':
         from sdf.provider import SDFDataset
         from loss import mape_loss
 
-        train_dataset = SDFDataset(opt.path, size=100, num_samples=2**18)
+        train_dataset = SDFDataset(opt.path, size=100, num_samples=2**14)
         train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=1, shuffle=True)
 
         valid_dataset = SDFDataset(opt.path, size=1, num_samples=2**18) # just a dummy
@@ -48,16 +51,24 @@ if __name__ == '__main__':
 
         criterion = mape_loss # torch.nn.L1Loss()
 
-        optimizer = lambda model: torch.optim.Adam([
-            {'name': 'encoding', 'params': model.encoder.parameters()},
-            {'name': 'net', 'params': model.backbone.parameters(), 'weight_decay': 1e-6},
-        ], lr=opt.lr, betas=(0.9, 0.99), eps=1e-15)
+        optimizer = lambda model: torch.optim.Adam(model.get_params(), lr=opt.lr, betas=(0.9, 0.99), eps=1e-15)
+        # optimizer = lambda model: torch.optim.LBFGS(model.parameters(), lr=opt.lr)
 
-        scheduler = lambda optimizer: optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
 
-        trainer = Trainer('ngp', model, workspace=opt.workspace, optimizer=optimizer, criterion=criterion, ema_decay=0.95, fp16=opt.fp16, lr_scheduler=scheduler, use_checkpoint='latest', eval_interval=1)
+        scheduler = lambda optimizer: optim.lr_scheduler.StepLR(optimizer, step_size=25, gamma=0.1)
 
-        trainer.train(train_loader, valid_loader, 20)
+        scheduler = lambda optimizer: optim.lr_scheduler.CyclicLR(
+                optimizer, 
+                scale_fn=scale_fn, scale_mode="cycle",
+                step_size_up=1, step_size_down=9, 
+                base_lr=1e-5, max_lr=1e-4,
+                cycle_momentum=False,
+                # verbose=True
+                )
+
+        trainer = Trainer('ngp', model, workspace=opt.workspace, optimizer=optimizer, criterion=criterion, ema_decay=0.95, fp16=opt.fp16, lr_scheduler=scheduler, use_checkpoint='latest', eval_interval=100)
+
+        trainer.train(train_loader, valid_loader, 100000)
 
         # also test
         trainer.save_mesh(os.path.join(opt.workspace, 'results', 'output.ply'), 1024)

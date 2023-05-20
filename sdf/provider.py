@@ -64,15 +64,18 @@ class SDFDataset(Dataset):
 
         # online sampling
         sdfs = np.zeros((self.num_samples, 1))
+        surface_size = self.num_samples // 2
+        perturb_size = surface_size // 4
+        uniform_size = self.num_samples  - surface_size
         # surface
-        points_surface = self.mesh.sample(self.num_samples * 7 // 8)
+        points_surface = self.mesh.sample(surface_size)
         # perturb surface
-        points_surface[self.num_samples // 2:] += 0.01 * np.random.randn(self.num_samples * 3 // 8, 3)
+        points_surface[-perturb_size:] += 0.01 * np.random.randn(perturb_size, 3)
         # random
-        points_uniform = np.random.rand(self.num_samples // 8, 3) * 2 - 1
+        points_uniform = np.random.rand(uniform_size, 3) * 2 - 1
         points = np.concatenate([points_surface, points_uniform], axis=0).astype(np.float32)
 
-        sdfs[self.num_samples // 2:] = -self.sdf_fn(points[self.num_samples // 2:])[:,None].astype(np.float32)
+        sdfs[-uniform_size:] = -self.sdf_fn(points[-uniform_size:])[:,None].astype(np.float32)
  
         # clip sdf
         if self.clip_sdf is not None:
