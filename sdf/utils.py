@@ -339,7 +339,6 @@ class Trainer(object):
             data = self.prepare_data(data)
 
             self.optimizer.zero_grad()
-
             with torch.cuda.amp.autocast(enabled=self.fp16):
                 preds, truths, loss = self.train_step(data)
             self.scaler.scale(loss).backward()

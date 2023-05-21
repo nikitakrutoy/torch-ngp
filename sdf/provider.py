@@ -6,6 +6,18 @@ from torch.utils.data import Dataset
 import trimesh
 import pysdf
 
+class SampleBox:
+
+    def __init__(self, path, num_samples):
+        self.path = path
+        self.num_samples = num_samples
+        box = trimesh.load(path, force="mesh")
+        vs = box.vertices
+        vmin = vs.min(0)
+        vmax = vs.max(0)
+        self.center = (vmin + vmax) / 2
+        self.scale = vmax - vmin
+
 def map_color(value, cmap_name='viridis', vmin=None, vmax=None):
     # value: [N], float
     # return: RGB, [N, 3], float in [0, 1]
@@ -26,20 +38,19 @@ def plot_pointcloud(pc, sdfs):
 
 # SDF dataset
 class SDFDataset(Dataset):
-    def __init__(self, path, size=100, num_samples=2**18, clip_sdf=None):
+    def __init__(self, path, size=100, num_samples=2**18, clip_sdf=None, sample_boxes=None):
         super().__init__()
         self.path = path
-
+        self.sample_boxes = sample_boxes
         # load obj 
         self.mesh = trimesh.load(path, force='mesh')
-
         # normalize to [-1, 1] (different from instant-sdf where is [0, 1])
         vs = self.mesh.vertices
         vmin = vs.min(0)
         vmax = vs.max(0)
         v_center = (vmin + vmax) / 2
-        v_scale = 2 / np.sqrt(np.sum((vmax - vmin) ** 2)) * 0.95
-        vs = (vs - v_center[None, :]) * v_scale
+        self.v_scale = 2 / np.sqrt(np.sum((vmax - vmin) ** 2)) * 0.95
+        vs = (vs - v_center[None, :]) * self.v_scale
         self.mesh.vertices = vs
 
         print(f"[INFO] mesh: {self.mesh.vertices.shape} {self.mesh.faces.shape}")
@@ -64,15 +75,35 @@ class SDFDataset(Dataset):
 
         # online sampling
         sdfs = np.zeros((self.num_samples, 1))
+        surface_size = (self.num_samples * 6) // 8
+        perturb_size = (surface_size * 4) // 8
+        uniform_size = self.num_samples  - surface_size
+
+        perturb_offsets = [0.1, 0.01]
+        perturb_offsets = np.repeat(perturb_offsets, perturb_size // len(perturb_offsets))
+        perturb_size = len(perturb_offsets)
+        # surface_size = self.num_samples * 7 // 8
+        # perturb_size = self.num_samples * 3 // 8
+        # uniform_size = self.num_samples  - surface_size
         # surface
-        points_surface = self.mesh.sample(self.num_samples * 7 // 8)
+        points_surface = self.mesh.sample(surface_size)
         # perturb surface
-        points_surface[self.num_samples // 2:] += 0.01 * np.random.randn(self.num_samples * 3 // 8, 3)
+        points_surface[-perturb_size:] += perturb_offsets[:, None] * np.random.randn(perturb_size, 3)
         # random
-        points_uniform = np.random.rand(self.num_samples // 8, 3) * 2 - 1
+        points_uniform = np.random.rand(uniform_size, 3) * 2 - 1
         points = np.concatenate([points_surface, points_uniform], axis=0).astype(np.float32)
 
-        sdfs[self.num_samples // 2:] = -self.sdf_fn(points[self.num_samples // 2:])[:,None].astype(np.float32)
+        sdfs[-(uniform_size + perturb_size):] = -self.sdf_fn(points[-(uniform_size + perturb_size):])[:,None].astype(np.float32)
+
+        if self.sample_boxes is not None:
+            box_points = []
+            for box in self.sample_boxes:
+                box_points.append(self.v_scale * (box.scale * np.random.randn(box.num_samples, 3) + box.center))
+            box_points = np.concatenate(box_points).astype(np.float32)
+            box_sdf = -self.sdf_fn(box_points)[:,None].astype(np.float32)
+
+            points = np.concatenate([points, box_points])
+            sdfs = np.concatenate([sdfs, box_sdf])
  
         # clip sdf
         if self.clip_sdf is not None:

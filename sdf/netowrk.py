@@ -89,6 +89,14 @@ class SqueezeSDFNetwork(nn.Module):
 
 
         return nn.ModuleList(backbone)
+    
+    def create_encoders(self, encoding, num_encoders):
+        encoders = []
+        for _ in range(num_encoders):
+                encoder, dim = get_encoder(encoding, input_dim=2, desired_resolution=self.resolution, num_levels=16, level_dim=8, log2_hashmap_size=19)
+                encoders.append(encoder)
+        return nn.ModuleList(encoders), dim
+
 
     def __init__(self,
                  encoding="hashgrid",
@@ -105,20 +113,25 @@ class SqueezeSDFNetwork(nn.Module):
         self.skips = skips
         self.hidden_dim = hidden_dim
         self.clip_sdf = clip_sdf
+        self.num_encoders=1
 
         self.out_dim = out_dim
         self.resolution = 2048
-        self.encoder_xy, self.in_dim_xy = get_encoder(encoding, input_dim=2, desired_resolution=self.resolution, num_levels=23, level_dim=8)
-        self.encoder_yz, self.in_dim_yz = get_encoder(encoding, input_dim=2, desired_resolution=self.resolution, num_levels=23, level_dim=8)
-        self.encoder_zx, self.in_dim_zx = get_encoder(encoding, input_dim=2, desired_resolution=self.resolution, num_levels=23, level_dim=8)
-        # self.encoder_xz, self.in_dim_xz = get_encoder(encoding, input_dim=2, desired_resolution=self.resolution, num_levels=23, level_dim=8)
-        # self.encoder_zy, self.in_dim_zy = get_encoder(encoding, input_dim=2, desired_resolution=self.resolution, num_levels=23, level_dim=8)
-        # self.encoder_yx, self.in_dim_yx = get_encoder(encoding, input_dim=2, desired_resolution=self.resolution, num_levels=23, level_dim=8)
+        self.encoders_xy, self.in_dim_xy = self.create_encoders(encoding, self.num_encoders)
+        self.encoders_yz, self.in_dim_yz = self.create_encoders(encoding, self.num_encoders)
+        self.encoders_zx, self.in_dim_zx = self.create_encoders(encoding, self.num_encoders)
 
 
-        self.backbone_xy = self.create_backbone(self.in_dim_xy, self.out_dim, self.hidden_dim, self.num_layers)
-        self.backbone_yz = self.create_backbone(self.in_dim_yz, self.out_dim, self.hidden_dim, self.num_layers)
-        self.backbone_zx = self.create_backbone(self.in_dim_zx, self.out_dim, self.hidden_dim, self.num_layers)
+        # self.encoder_yz, self.in_dim_yz = get_encoder(encoding, input_dim=2, desired_resolution=self.resolution, num_levels=32, level_dim=8)
+        # self.encoder_zx, self.in_dim_zx = get_encoder(encoding, input_dim=2, desired_resolution=self.resolution, num_levels=32, level_dim=8)
+        # self.encoder_xz, self.in_dim_xz = get_encoder(encoding, input_dim=2, desired_resolution=self.resolution, num_levels=32, level_dim=8)
+        # self.encoder_zy, self.in_dim_zy = get_encoder(encoding, input_dim=2, desired_resolution=self.resolution, num_levels=32, level_dim=8)
+        # self.encoder_yx, self.in_dim_yx = get_encoder(encoding, input_dim=2, desired_resolution=self.resolution, num_levels=32, level_dim=8)
+
+
+        self.backbone_xy = self.create_backbone(self.in_dim_xy * self.num_encoders, self.out_dim, self.hidden_dim, self.num_layers)
+        self.backbone_yz = self.create_backbone(self.in_dim_yz * self.num_encoders, self.out_dim, self.hidden_dim, self.num_layers)
+        self.backbone_zx = self.create_backbone(self.in_dim_zx * self.num_encoders, self.out_dim, self.hidden_dim, self.num_layers)
 
         # self.backbone_xz = self.create_backbone(self.in_dim_xz, self.out_dim, self.hidden_dim, self.num_layers)
         # self.backbone_zy = self.create_backbone(self.in_dim_zy, self.out_dim, self.hidden_dim, self.num_layers)
@@ -131,8 +144,8 @@ class SqueezeSDFNetwork(nn.Module):
             torch.nn.Linear(3, 1, bias=False),
         )
 
-    def forward_backbone(self, x, backbone, encoder):
-        x = encoder(x)
+    def forward_backbone(self, x, backbone, encoders):
+        x = torch.hstack([encoder(x) for encoder in encoders])
         h = x
         for l in range(self.num_layers):
             if l in self.skips:
@@ -156,19 +169,31 @@ class SqueezeSDFNetwork(nn.Module):
         # zy = x[:, [2, 1]]
         # xz = x[:, [0, 2]]
 
-        h_xy = self.forward_backbone(xy, self.backbone_xy, self.encoder_xy)
-        h_yz = self.forward_backbone(yz, self.backbone_yz, self.encoder_yz)
-        h_zx = self.forward_backbone(zx, self.backbone_zx, self.encoder_zx)
+        h_xy = self.forward_backbone(xy, self.backbone_xy, self.encoders_xy)
+        h_yz = self.forward_backbone(yz, self.backbone_yz, self.encoders_yz)
+        h_zx = self.forward_backbone(zx, self.backbone_zx, self.encoders_zx)
         # h_yx = self.forward_backbone(yx, self.backbone_yx, self.encoder_yx)
         # h_zy = self.forward_backbone(zy, self.backbone_zy, self.encoder_zy)
         # h_xz = self.forward_backbone(xz, self.backbone_xz, self.encoder_xz)
 
-        h1 = (h_xy * h_yz).sum(1)[:, None]
-        h2 = (h_yz * h_zx).sum(1)[:, None]
-        h3 = (h_zx * h_xy).sum(1)[:, None]
+        h11 = (h_xy * h_yz).sum(1)[:, None]
+        # h12 = (h_xy * h_zy).sum(1)[:, None]
+        # h13 = (h_yx * h_zy).sum(1)[:, None]
+        # h14 = (h_yx * h_yz).sum(1)[:, None]
 
+        h21 = (h_yz * h_zx).sum(1)[:, None]
+        # h22 = (h_yz * h_xz).sum(1)[:, None]
+        # h23 = (h_zy * h_zx).sum(1)[:, None]
+        # h24 = (h_zy * h_xz).sum(1)[:, None]
 
-        h = torch.cat([h1, h2, h3], dim=1)
+        h31 = (h_zx * h_xy).sum(1)[:, None]
+        # h32 = (h_zx * h_yx).sum(1)[:, None]
+        # h33 = (h_xz * h_xy).sum(1)[:, None]
+        # h34 = (h_zx * h_yx).sum(1)[:, None]
+
+        h = torch.cat([h11, h21, h31 ], dim=1)
+
+        # h = torch.cat([h11, h12, h13, h14, h21, h22, h23, h24, h31, h32, h33, h34], dim=1)
 
         h = self.head(h)
 
@@ -179,9 +204,9 @@ class SqueezeSDFNetwork(nn.Module):
     
     def get_params(self):
         return [
-            {'name': 'encoding', 'params': self.encoder_xy.parameters()},
-            {'name': 'encoding', 'params': self.encoder_yz.parameters()},
-            {'name': 'encoding', 'params': self.encoder_zx.parameters()},
+            {'name': 'encoding', 'params': self.encoders_xy.parameters()},
+            {'name': 'encoding', 'params': self.encoders_yz.parameters()},
+            {'name': 'encoding', 'params': self.encoders_zx.parameters()},
             # {'name': 'encoding', 'params': self.encoder_yx.parameters()},
             # {'name': 'encoding', 'params': self.encoder_zy.parameters()},
             # {'name': 'encoding', 'params': self.encoder_xz.parameters()},
