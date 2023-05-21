@@ -2,6 +2,7 @@ import torch
 import argparse
 
 from sdf.utils import *
+from sdf.provider import SampleBox
 
 def scale_fn(i):
     return 0.99 ** i
@@ -43,7 +44,17 @@ if __name__ == '__main__':
         from sdf.provider import SDFDataset
         from loss import mape_loss
 
-        train_dataset = SDFDataset(opt.path, size=100, num_samples=2**14)
+        train_dataset = SDFDataset(opt.path, size=100, num_samples=2**14,
+                                    sample_boxes=[
+                                        SampleBox("./data/sdf/sponza_sample_box_1.obj", num_samples=256),
+                                        SampleBox("./data/sdf/sponza_sample_box_2.obj", num_samples=256),
+                                        SampleBox("./data/sdf/sponza_sample_box_3.obj", num_samples=256),
+                                        SampleBox("./data/sdf/sponza_sample_box_curtains_1.obj", num_samples=256),
+                                        SampleBox("./data/sdf/sponza_sample_box_curtains_2.obj", num_samples=256),
+                                        SampleBox("./data/sdf/sponza_sample_box_lion.obj", num_samples=256),
+                                        SampleBox("./data/sdf/sponza_sample_box_stick_1.obj", num_samples=256),
+                                        SampleBox("./data/sdf/sponza_sample_box_stick_2.obj", num_samples=256)
+                                    ])
         train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=1, shuffle=True)
 
         valid_dataset = SDFDataset(opt.path, size=1, num_samples=2**18) # just a dummy

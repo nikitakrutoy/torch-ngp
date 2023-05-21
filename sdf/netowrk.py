@@ -103,7 +103,7 @@ class SqueezeSDFNetwork(nn.Module):
                  num_layers=3,
                  out_dim=8,
                  skips=[],
-                 hidden_dim=256,
+                 hidden_dim=128,
                  clip_sdf=None,
                  ):
         super().__init__()
@@ -113,7 +113,7 @@ class SqueezeSDFNetwork(nn.Module):
         self.skips = skips
         self.hidden_dim = hidden_dim
         self.clip_sdf = clip_sdf
-        self.num_encoders=2
+        self.num_encoders=1
 
         self.out_dim = out_dim
         self.resolution = 2048
