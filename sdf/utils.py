@@ -26,6 +26,8 @@ import mcubes
 from rich.console import Console
 from torch_ema import ExponentialMovingAverage
 
+from scipy.interpolate import RegularGridInterpolator
+
 import packaging
 
 def custom_meshgrid(*args):
@@ -59,7 +61,7 @@ def extract_fields(bound_min, bound_max, resolution, query_func):
                 for zi, zs in enumerate(Z):
                     xx, yy, zz = custom_meshgrid(xs, ys, zs)
                     pts = torch.cat([xx.reshape(-1, 1), yy.reshape(-1, 1), zz.reshape(-1, 1)], dim=-1) # [N, 3]
-                    val = query_func(pts).reshape(len(xs), len(ys), len(zs)).detach().cpu().numpy() # [N, 1] --> [x, y, z]
+                    val = query_func(pts).reshape(len(xs), len(ys), len(zs)) # [N, 1] --> [x, y, z]
                     u[xi * N: xi * N + len(xs), yi * N: yi * N + len(ys), zi * N: zi * N + len(zs)] = val
     return u
 
@@ -245,11 +247,29 @@ class Trainer(object):
             pts = pts.to(self.device)
             with torch.no_grad():
                 with torch.cuda.amp.autocast(enabled=self.fp16):
-                    sdfs = self.model(pts)
+                    sdfs = self.model(pts).detach().cpu().numpy()
             return sdfs
 
         bounds_min = torch.FloatTensor([-1, -1, -1])
         bounds_max = torch.FloatTensor([1, 1, 1])
+
+        N = self.train_loader.dataset.grid_size
+        foo = lambda x: -self.train_loader.dataset.sdf_fn(x)
+        self.U = extract_fields(bounds_min, bounds_max, resolution=N, query_func=foo)
+        gridMin = -1
+        gridMax = 1
+        x = np.linspace(gridMin, gridMax, N)
+        y = np.linspace(gridMin, gridMax, N)
+        z = np.linspace(gridMin, gridMax, N)
+        self.interpU = RegularGridInterpolator((x, y, z), self.U)
+
+        def query_func(pts):
+            pts_device = pts.to(self.device)
+            with torch.no_grad():
+                with torch.cuda.amp.autocast(enabled=self.fp16):
+                    sdfs = self.model(pts_device).detach().cpu().numpy()
+                    sdfs += self.interpU(pts).reshape(-1, 1)
+            return sdfs
 
         vertices, triangles = extract_geometry(bounds_min, bounds_max, resolution=resolution, threshold=0, query_func=query_func)
 
@@ -260,12 +280,14 @@ class Trainer(object):
 
     ### ------------------------------
 
-    def train(self, train_loader, valid_loader, max_epochs):
+    def train(self, train_loader, valid_loader, update_loader, max_epochs):
         if self.use_tensorboardX and self.local_rank == 0:
             self.writer = tensorboardX.SummaryWriter(os.path.join(self.workspace, "run", self.name))
-        
+        self.train_loader = train_loader
         for epoch in range(self.epoch + 1, max_epochs + 1):
             self.epoch = epoch
+
+            # self.update_one_epoch(train_loader, update_loader)
 
             self.train_one_epoch(train_loader)
 
@@ -353,6 +375,7 @@ class Trainer(object):
 
             loss_val = loss.item()
             total_loss += loss_val
+            loader.update(self.criterion(preds, truths, reduction=None))
 
             if self.local_rank == 0:
                 if self.report_metric_at_train:
@@ -388,6 +411,21 @@ class Trainer(object):
                 self.lr_scheduler.step()
 
         self.log(f"==> Finished Epoch {self.epoch}.")
+
+    def update_one_epoch(self, train_loader, update_loader):
+
+        self.model.eval()
+
+        with torch.no_grad():
+            data = next(iter(update_loader))                    
+            data = self.prepare_data(data)
+        
+            with torch.cuda.amp.autocast(enabled=self.fp16):
+                preds, truths, _ = self.eval_step(data)
+            
+            loss = self.criterion(preds, truths, reduction=None) + 10 * (torch.sign(preds) != torch.sign(truths))
+            probs = torch.softmax(loss, dim=0).detach().cpu().numpy().flatten()
+            train_loader.update_probs(probs)
 
 
     def evaluate_one_epoch(self, loader):

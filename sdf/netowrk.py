@@ -93,17 +93,27 @@ class SqueezeSDFNetwork(nn.Module):
     def create_encoders(self, encoding, num_encoders):
         encoders = []
         for _ in range(num_encoders):
-                encoder, dim = get_encoder(encoding, input_dim=2, desired_resolution=self.resolution, num_levels=16, level_dim=8, log2_hashmap_size=19)
+                encoder, dim = get_encoder(encoding, input_dim=2, desired_resolution=self.resolution, num_levels=23, level_dim=8, log2_hashmap_size=19)
                 encoders.append(encoder)
         return nn.ModuleList(encoders), dim
+    
+    def create_encoders2(self, encodings):
+        encoders = []
+        res_dim = 0
+        for enc in encodings:
+                encoder, dim = get_encoder(enc, input_dim=2, desired_resolution=self.resolution, num_levels=23, level_dim=8, log2_hashmap_size=19)
+                res_dim += dim
+                encoders.append(encoder)
+        return nn.ModuleList(encoders), res_dim
 
 
     def __init__(self,
                  encoding="hashgrid",
                  num_layers=3,
-                 out_dim=8,
+                 out_dim=4,
                  skips=[],
                  hidden_dim=128,
+                 resolution=2048,
                  clip_sdf=None,
                  ):
         super().__init__()
@@ -116,10 +126,16 @@ class SqueezeSDFNetwork(nn.Module):
         self.num_encoders=1
 
         self.out_dim = out_dim
-        self.resolution = 2048
+        self.resolution = resolution
+        # self.encoder_3d, self.in_dim_3d = get_encoder(encoding, input_dim=3, base_resolution=32, desired_resolution=None, num_levels=1, level_dim=2, log2_hashmap_size=15)
+        # self.encoder_3d, self.in_dim_3d = get_encoder(encoding, input_dim=3, desired_resolution=self.resolution, num_levels=23, level_dim=8, log2_hashmap_size=19)
+
         self.encoders_xy, self.in_dim_xy = self.create_encoders(encoding, self.num_encoders)
         self.encoders_yz, self.in_dim_yz = self.create_encoders(encoding, self.num_encoders)
         self.encoders_zx, self.in_dim_zx = self.create_encoders(encoding, self.num_encoders)
+        # self.encoders_xy, self.in_dim_xy = self.create_encoders2([encoding, "frequency"])
+        # self.encoders_yz, self.in_dim_yz = self.create_encoders2([encoding, "frequency"])
+        # self.encoders_zx, self.in_dim_zx = self.create_encoders2([encoding, "frequency"])
 
 
         # self.encoder_yz, self.in_dim_yz = get_encoder(encoding, input_dim=2, desired_resolution=self.resolution, num_levels=32, level_dim=8)
@@ -132,6 +148,9 @@ class SqueezeSDFNetwork(nn.Module):
         self.backbone_xy = self.create_backbone(self.in_dim_xy * self.num_encoders, self.out_dim, self.hidden_dim, self.num_layers)
         self.backbone_yz = self.create_backbone(self.in_dim_yz * self.num_encoders, self.out_dim, self.hidden_dim, self.num_layers)
         self.backbone_zx = self.create_backbone(self.in_dim_zx * self.num_encoders, self.out_dim, self.hidden_dim, self.num_layers)
+
+        # self.backbone_3d = self.create_backbone(self.in_dim_3d, 3, self.hidden_dim, self.num_layers)
+
 
         # self.backbone_xz = self.create_backbone(self.in_dim_xz, self.out_dim, self.hidden_dim, self.num_layers)
         # self.backbone_zy = self.create_backbone(self.in_dim_zy, self.out_dim, self.hidden_dim, self.num_layers)
@@ -168,6 +187,7 @@ class SqueezeSDFNetwork(nn.Module):
         # yx = x[:, [1, 0]]
         # zy = x[:, [2, 1]]
         # xz = x[:, [0, 2]]
+        # m = self.encoder_3d(x)
 
         h_xy = self.forward_backbone(xy, self.backbone_xy, self.encoders_xy)
         h_yz = self.forward_backbone(yz, self.backbone_yz, self.encoders_yz)
@@ -191,11 +211,15 @@ class SqueezeSDFNetwork(nn.Module):
         # h33 = (h_xz * h_xy).sum(1)[:, None]
         # h34 = (h_zx * h_yx).sum(1)[:, None]
 
-        h = torch.cat([h11, h21, h31 ], dim=1)
+        h = h11 + h21 + h31
+        # h = torch.cat([h11, h21, h31, torch.ones_like(h11)], dim=1)
+        # h = torch.cat([h11, h21, h31], dim=1)
+
 
         # h = torch.cat([h11, h12, h13, h14, h21, h22, h23, h24, h31, h32, h33, h34], dim=1)
-
-        h = self.head(h)
+        # m = self.forward_backbone(x, self.backbone_3d, [self.encoder_3d])
+        # h = h + (m).sum(dim=1).view(-1, 1)
+        # h = self.head(h)
 
         if self.clip_sdf is not None:
             h = h.clamp(-self.clip_sdf, self.clip_sdf)
@@ -217,6 +241,8 @@ class SqueezeSDFNetwork(nn.Module):
             # {'name': 'net', 'params': self.backbone_yx.parameters(), 'weight_decay': 1e-6},
             # {'name': 'net', 'params': self.backbone_zy.parameters(), 'weight_decay': 1e-6},
             # {'name': 'net', 'params': self.backbone_xz.parameters(), 'weight_decay': 1e-6},
+            # {'name': 'net', 'params': self.encoder_3d.parameters(), 'weight_decay': 1e-6},
+            # {'name': 'net', 'params': self.backbone_3d.parameters(), 'weight_decay': 1e-6},
 
-            {'name': 'net', 'params': self.head.parameters(), 'weight_decay': 1e-6},
+            # {'name': 'net', 'params': self.head.parameters(), 'weight_decay': 1e-6},
         ]
